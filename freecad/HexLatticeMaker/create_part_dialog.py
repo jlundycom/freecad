@@ -29,22 +29,27 @@ class HexLatticeDialog(QtWidgets.QDialog):
             w.setSuffix(suffix)
             return w
 
-        self.width_spin  = _spin(10.0,  5000.0, 300.0)
-        self.length_spin = _spin(10.0,  5000.0, 300.0)
-        self.height_spin = _spin( 1.0,   220.0,  10.0)
-        self.perim_spin  = _spin( 1.0,   100.0,   6.0)
-        self.hex_spin    = _spin( 1.0,   100.0,   8.0)
+        self.width_spin      = _spin(10.0,  5000.0, 300.0)
+        self.length_spin     = _spin(10.0,  5000.0, 300.0)
+        self.height_spin     = _spin( 1.0,   220.0,  10.0)
+        self.perim_spin      = _spin( 1.0,   100.0,   6.0)
+        self.hex_spin        = _spin( 1.0,   100.0,   8.0)
+        self.wall_spin       = _spin( 0.5,    10.0,   1.5, dec=2)
+        self.max_piece_spin  = _spin(10.0,   220.0, 220.0)
 
         form.addRow("Width  (X):",              self.width_spin)
         form.addRow("Length (Y):",              self.length_spin)
         form.addRow("Height (Z):",              self.height_spin)
         form.addRow("Perimeter width:",         self.perim_spin)
         form.addRow("Hexagon size\n(side length):", self.hex_spin)
+        form.addRow("Wall thickness:",          self.wall_spin)
+        form.addRow("Max piece size:",          self.max_piece_spin)
 
         # Info label
         info = QtWidgets.QLabel(
-            "<i>Parts larger than 220 mm are automatically sliced into\n"
-            "interlocking finger-joint pieces for 3-D printing.</i>"
+            "<i>Parts wider/longer than <b>Max piece size</b> are automatically\n"
+            "sliced into interlocking finger-joint pieces for 3-D printing.\n"
+            "<b>Wall thickness</b> sets the material between hex cells.</i>"
         )
         info.setWordWrap(True)
 
@@ -64,9 +69,11 @@ class HexLatticeDialog(QtWidgets.QDialog):
     def get_params(self) -> dict:
         """Return the dialog values as a plain dictionary."""
         return {
-            "width":       self.width_spin.value(),
-            "length":      self.length_spin.value(),
-            "height":      self.height_spin.value(),
-            "perim_width": self.perim_spin.value(),
-            "hex_size":    self.hex_spin.value(),
+            "width":          self.width_spin.value(),
+            "length":         self.length_spin.value(),
+            "height":         self.height_spin.value(),
+            "perim_width":    self.perim_spin.value(),
+            "hex_size":       self.hex_spin.value(),
+            "wall_thickness": self.wall_spin.value(),
+            "max_piece_size": self.max_piece_spin.value(),
         }

@@ -76,6 +76,24 @@ class TestComputeCuts:
         for span in spans:
             assert span <= MAX_PIECE_SIZE + 1e-6
 
+    def test_custom_max_piece_size_respected(self):
+        """compute_cuts should use a caller-supplied max_piece_size."""
+        cuts = compute_cuts(250.0, max_piece_size=100.0)
+        assert cuts == [100.0, 200.0]
+
+    def test_custom_max_piece_size_no_cut_when_fits(self):
+        cuts = compute_cuts(100.0, max_piece_size=100.0)
+        assert cuts == []
+
+    def test_custom_max_piece_size_spans_within_limit(self):
+        total = 500.0
+        mps   = 150.0
+        cuts  = compute_cuts(total, max_piece_size=mps)
+        bounds = [0.0] + cuts + [total]
+        spans  = [b - a for a, b in zip(bounds[:-1], bounds[1:])]
+        for span in spans:
+            assert span <= mps + 1e-6
+
 
 # ===========================================================================
 # hex_centers

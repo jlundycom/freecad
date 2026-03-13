@@ -64,17 +64,17 @@ MIN_SEG_RATIO  = 0.25    # minimum fraction of tab_w for an end-segment to be ke
 # Helpers that work without FreeCAD (used in unit tests)
 # ---------------------------------------------------------------------------
 
-def compute_cuts(total_dim: float) -> list:
+def compute_cuts(total_dim: float, max_piece_size: float = MAX_PIECE_SIZE) -> list:
     """Return a list of cut positions along a single dimension.
 
     Pieces will be in the range [0, cuts[0]], [cuts[0], cuts[1]], …
-    Each span is ≤ MAX_PIECE_SIZE.
+    Each span is ≤ *max_piece_size*.
     """
     cuts = []
-    pos = MAX_PIECE_SIZE
+    pos = max_piece_size
     while pos < total_dim - 0.01:         # 0.01 mm epsilon – no cut at the very edge
         cuts.append(float(pos))
-        pos += MAX_PIECE_SIZE
+        pos += max_piece_size
     return cuts
 
 
@@ -183,13 +183,17 @@ def make_hex_prism(cx: float, cy: float, side: float, height: float):
 
 
 def _fuse_shapes(shapes):
-    """Fuse a list of shapes into one.  Returns None for an empty list."""
+    """Fuse a list of shapes into one.  Returns None for an empty list.
+
+    Uses ``multiFuse`` when more than one shape is present so that OCCT can
+    execute a single multi-operand boolean union instead of O(N) chained
+    pairwise operations – significantly faster for large hex lattices.
+    """
     if not shapes:
         return None
-    result = shapes[0]
-    for s in shapes[1:]:
-        result = result.fuse(s)
-    return result
+    if len(shapes) == 1:
+        return shapes[0]
+    return shapes[0].multiFuse(shapes[1:])
 
 
 def _cut_shapes(base, cutters):
@@ -345,6 +349,7 @@ def make_piece(
     height: float,
     perim_w: float,
     hex_size: float,
+    wall_t: float,
     x_cuts: list,
     y_cuts: list,
 ) -> object:  # returns Part.Shape
@@ -358,13 +363,13 @@ def make_piece(
     height   : part thickness (Z)
     perim_w  : solid perimeter width
     hex_size : hexagon side length
+    wall_t   : minimum wall thickness between adjacent hex cells
     x_cuts   : list of X-cut positions
     y_cuts   : list of Y-cut positions
     """
     import FreeCAD as App
     import Part
 
-    wall_t = max(1.2, hex_size * 0.15)
     tab_w  = perim_w
     tab_d  = perim_w * 0.5
 
@@ -386,6 +391,11 @@ def make_piece(
     if gx1 > gx0 and gy1 > gy0:
         centers = hex_centers(gx0, gx1, gy0, gy1, hex_size, wall_t)
         hex_holes = []
+
+        # Clip box is constant for the whole piece – create it once.
+        clip_box = Part.makeBox(x1 - x0, y1 - y0, height,
+                                App.Vector(x0, y0, 0.0))
+
         for cx, cy in centers:
             if is_excluded(cx, cy, hex_size, perim_w,
                            total_w, total_l, x_cuts, y_cuts):
@@ -395,13 +405,17 @@ def make_piece(
                     cy + hex_size < y0 or cy - hex_size > y1):
                 continue
 
-            prism    = make_hex_prism(cx, cy, hex_size, height)
-            # Clip to this piece's nominal bounds
-            clip_box = Part.makeBox(x1 - x0, y1 - y0, height,
-                                    App.Vector(x0, y0, 0.0))
-            clipped  = prism.common(clip_box)
-            if clipped.Volume > 1e-9:
-                hex_holes.append(clipped)
+            prism = make_hex_prism(cx, cy, hex_size, height)
+
+            # Only run the (expensive) common() clip for hexes that actually
+            # straddle a piece boundary.  Interior hexes are added as-is.
+            if (cx - hex_size < x0 + 1e-6 or cx + hex_size > x1 - 1e-6 or
+                    cy - hex_size < y0 + 1e-6 or cy + hex_size > y1 - 1e-6):
+                clipped = prism.common(clip_box)
+                if clipped.Volume > 1e-9:
+                    hex_holes.append(clipped)
+            else:
+                hex_holes.append(prism)
 
         if hex_holes:
             holes_union = _fuse_shapes(hex_holes)
@@ -447,8 +461,22 @@ def create_all_pieces(
     height: float,
     perim_width: float,
     hex_size: float,
+    wall_thickness: float = None,
+    max_piece_size: float = MAX_PIECE_SIZE,
 ) -> list:
     """Create all interlocking pieces for a hex-lattice flat panel.
+
+    Parameters
+    ----------
+    width, length, height : overall part dimensions (mm)
+    perim_width           : solid border width and finger-joint bridge thickness
+    hex_size              : hexagon cell side length (mm)
+    wall_thickness        : minimum wall between hex cells (mm).
+                            Defaults to ``max(1.2, hex_size * 0.15)``.
+    max_piece_size        : maximum printable piece length/width (mm).
+                            Panels larger than this are sliced into pieces.
+                            The dialog limits this to 1–220 mm to avoid
+                            printer exclusion zones.
 
     Returns
     -------
@@ -457,8 +485,11 @@ def create_all_pieces(
     """
     _require_freecad()
 
-    x_cuts  = compute_cuts(width)
-    y_cuts  = compute_cuts(length)
+    if wall_thickness is None:
+        wall_thickness = max(1.2, hex_size * 0.15)
+
+    x_cuts   = compute_cuts(width,  max_piece_size)
+    y_cuts   = compute_cuts(length, max_piece_size)
     x_bounds = [0.0] + x_cuts + [width]
     y_bounds = [0.0] + y_cuts + [length]
 
@@ -470,6 +501,7 @@ def create_all_pieces(
                 x0, x1, y0, y1,
                 width, length,
                 height, perim_width, hex_size,
+                wall_thickness,
                 x_cuts, y_cuts,
             )
             pieces.append((f"Piece_{ix}_{iy}", shape))

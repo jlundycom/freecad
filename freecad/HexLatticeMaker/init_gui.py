@@ -61,7 +61,9 @@ def _build_parts(params: dict):
 
     App.Console.PrintMessage(
         f"[HexLatticeMaker] Creating pieces for "
-        f"{params['width']} × {params['length']} × {params['height']} mm …\n"
+        f"{params['width']} × {params['length']} × {params['height']} mm "
+        f"(wall={params['wall_thickness']} mm, "
+        f"max_piece={params['max_piece_size']} mm) …\n"
     )
 
     pieces = create_all_pieces(**params)

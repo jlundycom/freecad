@@ -24,8 +24,10 @@ Height (Z mm)       Thickness of the flat panel (≤ 220 mm recommended).
 Perimeter width mm  Solid border around the edges of the panel, and the
                     material used for the finger-joint bridges at cut lines.
 Hexagon size mm     Side length of every regular hexagonal void cell.
-                    The wall thickness between cells is automatically set to
-                    max(1.2 mm, 15 % of hex_size).
+Wall thickness mm   Minimum wall of material between adjacent hex cells.
+                    Smaller values give a lighter, more open lattice.
+Max piece size mm   Maximum length/width of any printed piece (1–220 mm).
+                    Panels larger than this are sliced automatically.
 
 Geometry details
 ----------------
@@ -83,7 +85,9 @@ else:
         f"[HexLatticeMaker] Building "
         f"{_params['width']} × {_params['length']} × {_params['height']} mm "
         f"part (perim={_params['perim_width']} mm, "
-        f"hex={_params['hex_size']} mm) …\n"
+        f"hex={_params['hex_size']} mm, "
+        f"wall={_params['wall_thickness']} mm, "
+        f"max_piece={_params['max_piece_size']} mm) …\n"
     )
 
     _doc = App.activeDocument()
