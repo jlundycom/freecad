@@ -1,0 +1,36 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Pytest
+.pytest_cache/
+.cache/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# FreeCAD generated files
+*.FCBak
+*.FCStd1
+
+# Editor artefacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artefacts
+.DS_Store
+Thumbs.db
