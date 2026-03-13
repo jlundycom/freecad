@@ -55,7 +55,7 @@ import math
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_PIECE_SIZE = 240.0   # mm  – maximum dimension of a printable piece
+MAX_PIECE_SIZE = 220.0   # mm  – maximum dimension of a printable piece
 FIT_CLEARANCE  = 0.15    # mm  – assembly clearance (bilateral)
 MIN_SEG_RATIO  = 0.25    # minimum fraction of tab_w for an end-segment to be kept
 

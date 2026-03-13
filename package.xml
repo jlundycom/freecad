@@ -4,7 +4,7 @@
   <name>HexLatticeMaker</name>
   <description>
     Creates parametric flat panels filled with a hexagonal lattice for 3-D
-    printing.  Panels larger than 240 × 240 mm are automatically sliced into
+    printing.  Panels larger than 220 × 220 mm are automatically sliced into
     interlocking finger-jointed pieces that fit on a standard FDM printer bed.
   </description>
   <version>1.0.0</version>

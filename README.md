@@ -2,7 +2,7 @@
 
 A FreeCAD workbench and macro that creates **parametric flat panels filled with
 a hexagonal lattice**, then automatically slices them into **interlocking
-finger-jointed pieces ≤ 240 × 240 × 240 mm** so each piece fits on a standard
+finger-jointed pieces ≤ 220 × 220 × 220 mm** so each piece fits on a standard
 FDM 3-D printer bed.
 
 ---
@@ -13,7 +13,7 @@ FDM 3-D printer bed.
 |---------|--------|
 | **Hex lattice infill** | Pointy-top regular hexagons (user-specified side length) fill the interior of the panel leaving a solid perimeter. |
 | **Solid perimeter** | A user-specified border (in mm) is kept fully solid around all edges. |
-| **Auto-slicing** | Panels wider or longer than 240 mm are automatically sliced into pieces along X and Y. |
+| **Auto-slicing** | Panels wider or longer than 220 mm are automatically sliced into pieces along X and Y. |
 | **Finger-joint interlocks** | Each cut face has alternating rectangular tabs and slots. Adjacent pieces have the complementary pattern so they lock together. |
 | **Cut bridges** | The material within `perim_width / 2` of every cut line is solid (no hex voids), providing a strong base for the finger-joint. |
 | **Weight-bearing** | Multiple full-height finger tabs provide excellent shear and tension resistance. For extra strength apply CA glue or use M3 bolts through the bridge area. |
@@ -109,12 +109,12 @@ pieces are always complementary.
 A 500 × 300 × 10 mm panel with `perim_width = 6 mm` and `hex_size = 8 mm`:
 
 ```
-X cuts:  [240]   → 2 columns  → pieces [0,240] and [240,500]
+X cuts:  [220]   → 2 columns  → pieces [0,220] and [220,500]
 Y cuts:  []      → 1 row      → 2 pieces total
 ```
 
-Each piece has finger joints on the shared X = 240 face.  The bridge region
-`[237, 243]` (± 3 mm) is kept solid.
+Each piece has finger joints on the shared X = 220 face.  The bridge region
+`[217, 223]` (± 3 mm) is kept solid.
 
 ---
 

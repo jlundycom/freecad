@@ -4,7 +4,7 @@ HexLatticeMaker.FCMacro
 Standalone FreeCAD macro – run this directly from the FreeCAD Macro menu.
 
 Creates a parametric flat part filled with a hexagonal lattice then slices
-it into interlocking finger-jointed pieces ≤ 240 × 240 × 240 mm so that each
+it into interlocking finger-jointed pieces ≤ 220 × 220 × 220 mm so that each
 piece fits on a standard FDM printer bed.
 
 Usage
@@ -20,7 +20,7 @@ Parameters
 ----------
 Width  (X mm)       Total width of the flat panel.
 Length (Y mm)       Total length of the flat panel.
-Height (Z mm)       Thickness of the flat panel (≤ 240 mm recommended).
+Height (Z mm)       Thickness of the flat panel (≤ 220 mm recommended).
 Perimeter width mm  Solid border around the edges of the panel, and the
                     material used for the finger-joint bridges at cut lines.
 Hexagon size mm     Side length of every regular hexagonal void cell.

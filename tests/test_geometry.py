@@ -37,24 +37,24 @@ import pytest
 class TestComputeCuts:
     def test_no_cut_needed_for_small_part(self):
         assert compute_cuts(200.0) == []
-        assert compute_cuts(240.0) == []
+        assert compute_cuts(220.0) == []
 
-    def test_one_cut_for_part_just_over_240(self):
-        cuts = compute_cuts(241.0)
-        assert cuts == [240.0]
+    def test_one_cut_for_part_just_over_220(self):
+        cuts = compute_cuts(221.0)
+        assert cuts == [220.0]
 
-    def test_one_cut_for_part_at_480(self):
-        # 480 mm: one cut at 240; piece [0,240] and [240,480]
-        cuts = compute_cuts(480.0)
-        assert cuts == [240.0]
+    def test_one_cut_for_part_at_440(self):
+        # 440 mm: one cut at 220; piece [0,220] and [220,440]
+        cuts = compute_cuts(440.0)
+        assert cuts == [220.0]
 
-    def test_two_cuts_for_481_mm(self):
-        cuts = compute_cuts(481.0)
-        assert cuts == [240.0, 480.0]
+    def test_two_cuts_for_441_mm(self):
+        cuts = compute_cuts(441.0)
+        assert cuts == [220.0, 440.0]
 
     def test_no_duplicate_cuts(self):
         # Exact multiples
-        cuts = compute_cuts(480.0)
+        cuts = compute_cuts(440.0)
         assert len(cuts) == len(set(cuts))
 
     def test_cuts_are_ascending(self):
@@ -219,8 +219,8 @@ class TestIsExcluded:
 # ===========================================================================
 
 class TestConstants:
-    def test_max_piece_size_is_240(self):
-        assert MAX_PIECE_SIZE == 240.0
+    def test_max_piece_size_is_220(self):
+        assert MAX_PIECE_SIZE == 220.0
 
     def test_fit_clearance_is_positive(self):
         assert FIT_CLEARANCE > 0.0
@@ -252,7 +252,7 @@ class TestPieceBoundaries:
         for a, b in zip(bounds[:-1], bounds[1:]):
             assert b > a
 
-    def test_single_piece_for_240_or_less(self):
-        for total in (100.0, 200.0, 240.0):
+    def test_single_piece_for_220_or_less(self):
+        for total in (100.0, 200.0, 220.0):
             cuts = compute_cuts(total)
             assert cuts == [], f"Expected no cuts for total={total}"

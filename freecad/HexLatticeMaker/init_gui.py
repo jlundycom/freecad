@@ -27,7 +27,7 @@ class CreateHexLatticePartCmd:
             "MenuText": "Create Hex Lattice Part",
             "ToolTip":  (
                 "Create a parametric flat part filled with a hexagonal lattice, "
-                "automatically sliced into finger-jointed pieces ≤ 240 mm."
+                "automatically sliced into finger-jointed pieces ≤ 220 mm."
             ),
         }
 
