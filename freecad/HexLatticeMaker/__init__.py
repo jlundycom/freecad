@@ -1,0 +1,1 @@
+"""freecad/HexLatticeMaker package."""

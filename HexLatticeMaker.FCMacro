@@ -1,0 +1,112 @@
+"""
+HexLatticeMaker.FCMacro
+=======================
+Standalone FreeCAD macro – run this directly from the FreeCAD Macro menu.
+
+Creates a parametric flat part filled with a hexagonal lattice then slices
+it into interlocking finger-jointed pieces ≤ 220 × 220 × 220 mm so that each
+piece fits on a standard FDM printer bed.
+
+Usage
+-----
+  1. Open FreeCAD (any document, or start fresh).
+  2. Macro ▸ Macros … ▸ select this file ▸ Execute.
+  3. Enter the part dimensions in the dialog that appears.
+  4. Wait for the geometry to be built (progress shown in the FreeCAD console).
+  5. Each piece appears as a separate object named ``Piece_X_Y``.
+     Export each piece as an STL/3MF for slicing and printing.
+
+Parameters
+----------
+Width  (X mm)       Total width of the flat panel.
+Length (Y mm)       Total length of the flat panel.
+Height (Z mm)       Thickness of the flat panel (≤ 220 mm recommended).
+Perimeter width mm  Solid border around the edges of the panel, and the
+                    material used for the finger-joint bridges at cut lines.
+Hexagon size mm     Side length of every regular hexagonal void cell.
+Wall thickness mm   Minimum wall of material between adjacent hex cells.
+                    Smaller values give a lighter, more open lattice.
+Max piece size mm   Maximum length/width of any printed piece (1–220 mm).
+                    Panels larger than this are sliced automatically.
+
+Geometry details
+----------------
+* The interior of the panel (inside the perimeter band) is hollowed out
+  with a pointy-top hexagonal grid.
+* The area within ``perim_width / 2`` of every cut line is kept solid to
+  form the finger-joint bridge.
+* Finger joints use alternating rectangular tabs and slots.
+  tab_width = perim_width
+  tab_depth = perim_width / 2
+  Assembly clearance = 0.15 mm (bilateral) – designed for FDM printing.
+* For weight-bearing assemblies it is recommended to apply a small amount
+  of CA glue or use M3 bolts through the bridge area.
+"""
+
+import sys
+import os
+import FreeCAD as App
+
+# ------------------------------------------------------------------
+# Locate the package (same directory as this macro, or installed path)
+# ------------------------------------------------------------------
+_macro_dir = os.path.dirname(os.path.abspath(__file__))
+if _macro_dir not in sys.path:
+    sys.path.insert(0, _macro_dir)
+
+# Try importing from the installed package; fall back to relative path
+try:
+    from freecad.HexLatticeMaker.hex_lattice_core   import create_all_pieces
+    from freecad.HexLatticeMaker.create_part_dialog import HexLatticeDialog
+except ImportError:
+    # If the macro lives in the repo root, add the repo to sys.path
+    _repo_root = _macro_dir
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    from freecad.HexLatticeMaker.hex_lattice_core   import create_all_pieces
+    from freecad.HexLatticeMaker.create_part_dialog import HexLatticeDialog
+
+# ------------------------------------------------------------------
+# Show dialog
+# ------------------------------------------------------------------
+try:
+    import FreeCADGui as Gui
+    _parent = Gui.getMainWindow()
+except Exception:
+    _parent = None
+
+_dlg = HexLatticeDialog(_parent)
+if _dlg.exec_() != _dlg.Accepted:
+    App.Console.PrintMessage("[HexLatticeMaker] Cancelled.\n")
+else:
+    _params = _dlg.get_params()
+
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Building "
+        f"{_params['width']} × {_params['length']} × {_params['height']} mm "
+        f"part (perim={_params['perim_width']} mm, "
+        f"hex={_params['hex_size']} mm, "
+        f"wall={_params['wall_thickness']} mm, "
+        f"max_piece={_params['max_piece_size']} mm) …\n"
+    )
+
+    _doc = App.activeDocument()
+    if _doc is None:
+        _doc = App.newDocument("HexLatticePart")
+
+    _pieces = create_all_pieces(**_params)
+
+    for _name, _shape in _pieces:
+        _obj        = _doc.addObject("Part::Feature", _name)
+        _obj.Shape  = _shape
+
+    _doc.recompute()
+
+    try:
+        Gui.SendMsgToActiveView("ViewFit")
+    except Exception:
+        pass
+
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Done – {len(_pieces)} piece(s) created.\n"
+    )
