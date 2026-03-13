@@ -1,0 +1,36 @@
+<?xml version='1.0' encoding='UTF-8' standalone='no'?>
+<package format='1' xmlns='https://wiki.freecad.org/Package_Metadata'>
+
+  <name>HexLatticeMaker</name>
+  <description>
+    Creates parametric flat panels filled with a hexagonal lattice for 3-D
+    printing.  Panels larger than 240 × 240 mm are automatically sliced into
+    interlocking finger-jointed pieces that fit on a standard FDM printer bed.
+  </description>
+  <version>1.0.0</version>
+
+  <freecadmin>0.20</freecadmin>
+  <pythonmin>3.8</pythonmin>
+
+  <maintainer email=''>jlundycom</maintainer>
+  <author     email=''>jlundycom</author>
+
+  <license file='LICENSE'>LGPL-2.1-or-later</license>
+
+  <url type='repository' branch='main'>
+    https://github.com/jlundycom/freecad
+  </url>
+  <url type='bugtracker'>
+    https://github.com/jlundycom/freecad/issues
+  </url>
+
+  <icon>freecad/HexLatticeMaker/Resources/Icons/HexLatticeMaker.svg</icon>
+
+  <tag>Workbench</tag>
+  <tag>Parametric</tag>
+  <tag>3D Printing</tag>
+  <tag>Hex Lattice</tag>
+
+  <content><workbench/></content>
+
+</package>
