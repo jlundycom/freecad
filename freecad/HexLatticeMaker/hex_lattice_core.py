@@ -55,9 +55,10 @@ import math
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_PIECE_SIZE = 220.0   # mm  – maximum dimension of a printable piece
-FIT_CLEARANCE  = 0.15    # mm  – assembly clearance (bilateral)
-MIN_SEG_RATIO  = 0.25    # minimum fraction of tab_w for an end-segment to be kept
+MAX_PIECE_SIZE   = 220.0   # mm  – maximum dimension of a printable piece
+FIT_CLEARANCE    = 0.15    # mm  – assembly clearance (bilateral)
+MIN_SEG_RATIO    = 0.25    # minimum fraction of tab_w for an end-segment to be kept
+PIN_RADIUS_RATIO = 0.25    # round through-pin radius = leg_width × PIN_RADIUS_RATIO
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +524,12 @@ def leg_flush_placements(
     ]
 
 
-def make_leg(leg_width: float, leg_height: float, peg_depth: float) -> object:  # Part.Shape
+def make_leg(
+    leg_width: float,
+    leg_height: float,
+    peg_depth: float,
+    shelf_height: float = 0.0,
+) -> object:  # Part.Shape
     """Return a FreeCAD Part.Shape for a single shelf leg with tenon peg.
 
     The part is created in **print orientation**: base at z = 0, peg pointing
@@ -533,31 +539,53 @@ def make_leg(leg_width: float, leg_height: float, peg_depth: float) -> object:  
     --------
     ::
 
-        z = leg_height + peg_depth  ── top of peg
-             │  peg  │  ← square tenon, same width as body, enters blind hole
+        z = leg_height + shelf_height  ── top of round through-pin (flush with shelf top)
+             │  pin   │  ← cylindrical pin, radius = leg_width × PIN_RADIUS_RATIO
+        z = leg_height + peg_depth  ── top of square tenon
+             │  tenon │  ← square tenon, same width as body, enters blind hole
         z = leg_height  ────────────  ← shoulder rests on shelf underside
-             │  body │  ← main support column
+             │  body  │  ← main support column
         z = 0  ─────────────────────  ← print-bed face / bottom of leg
 
     When positioned in the assembly (via :func:`create_shelf_with_legs`) the
     leg is translated so that the shoulder sits at z = 0 (shelf bottom face),
-    the body hangs below (z = -leg_height), and the peg protrudes upward into
-    the shelf's blind corner hole (z = 0 … peg_depth).
+    the body hangs below (z = -leg_height), the square tenon protrudes upward
+    into the shelf's blind corner hole (z = 0 … peg_depth), and the round
+    through-pin rises through the full shelf height ending flush with the
+    shelf top face (z = 0 … shelf_height in world space).
 
     Parameters
     ----------
-    leg_width  : side length of the square cross-section for both body and peg (mm)
-    leg_height : height of the support column below the shelf (mm)
-    peg_depth  : height of the tenon peg that enters the shelf blind hole (mm)
+    leg_width    : side length of the square cross-section for both body and peg (mm)
+    leg_height   : height of the support column below the shelf (mm)
+    peg_depth    : height of the square tenon that enters the shelf blind hole (mm)
+    shelf_height : shelf panel height (mm).  When > 0 a cylindrical through-pin
+                   of radius ``leg_width × PIN_RADIUS_RATIO`` is fused to the
+                   leg at its centre, running from the shoulder
+                   (z = leg_height) to the shelf top (z = leg_height + shelf_height).
     """
     import FreeCAD as App
     import Part
 
     total_height = leg_height + peg_depth
-    return Part.makeBox(
+    body = Part.makeBox(
         leg_width, leg_width, total_height,
         App.Vector(0.0, 0.0, 0.0),
     )
+
+    if shelf_height > 0.0:
+        pin_radius = leg_width * PIN_RADIUS_RATIO
+        cx = leg_width * 0.5
+        cy = leg_width * 0.5
+        pin = Part.makeCylinder(
+            pin_radius,
+            shelf_height,
+            App.Vector(cx, cy, leg_height),
+            App.Vector(0.0, 0.0, 1.0),
+        )
+        body = body.fuse(pin)
+
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -710,6 +738,21 @@ def create_shelf_with_legs(
             )
         )
 
+    # Cylindrical through-hole cutters: full shelf height, centred on each
+    # leg's round through-pin.  Slightly wider than the pin for a clearance fit.
+    pin_radius      = leg_width * PIN_RADIUS_RATIO
+    pin_hole_radius = pin_radius + FIT_CLEARANCE * 0.5
+    pin_hole_cutters = []
+    for cx, cy in corner_ctrs:
+        pin_hole_cutters.append(
+            Part.makeCylinder(
+                pin_hole_radius,
+                height,
+                App.Vector(cx, cy, 0.0),
+                App.Vector(0.0, 0.0, 1.0),
+            )
+        )
+
     # ------------------------------------------------------------------
     # Build shelf pieces and cut blind sockets where they overlap.
     # Shelf pieces carry an identity placement (origin unchanged).
@@ -726,7 +769,7 @@ def create_shelf_with_legs(
                 x_cuts, y_cuts,
             )
 
-            # Cut blind sockets that intersect this piece
+            # Cut blind sockets and round through-holes that intersect this piece
             for cutter, (cx, cy) in zip(hole_cutters, corner_ctrs):
                 h_x0 = cx - hole_half
                 h_x1 = cx + hole_half
@@ -735,24 +778,30 @@ def create_shelf_with_legs(
                 if h_x1 > x0 and h_x0 < x1 and h_y1 > y0 and h_y0 < y1:
                     shape = shape.cut(cutter)
 
+            for pin_cutter, (cx, cy) in zip(pin_hole_cutters, corner_ctrs):
+                if (cx + pin_hole_radius > x0 and cx - pin_hole_radius < x1
+                        and cy + pin_hole_radius > y0 and cy - pin_hole_radius < y1):
+                    shape = shape.cut(pin_cutter)
+
             results.append((f"Piece_{ix}_{iy}", shape, App.Vector(0.0, 0.0, 0.0)))
 
     # ------------------------------------------------------------------
     # Build legs at the local origin; placement applied by the caller.
     #
     # Leg geometry (print orientation, base at z = 0):
-    #   body column  z = 0 … leg_height
-    #   tenon peg    z = leg_height … leg_height + peg_depth
+    #   body column     z = 0 … leg_height
+    #   square tenon    z = leg_height … leg_height + peg_depth
+    #   round through-pin z = leg_height … leg_height + height (flush with shelf top)
     #
     # Placement vector shifts z = 0 of the leg to z = -leg_height in world
-    # space (shoulder sits at shelf bottom face), so the peg protrudes into
-    # the blind socket at z = 0 … peg_depth.
+    # space (shoulder sits at shelf bottom face), so the tenon protrudes into
+    # the blind socket and the round pin rises through the full shelf height.
     # ------------------------------------------------------------------
     corner_labels = ["BottomLeft", "BottomRight", "TopLeft", "TopRight"]
     for i, (label, (px, py, pz)) in enumerate(zip(corner_labels, placements)):
         results.append((
             f"Leg_{i}_{label}",
-            make_leg(leg_width, leg_height, peg_depth),
+            make_leg(leg_width, leg_height, peg_depth, shelf_height=height),
             App.Vector(px, py, pz),
         ))
 

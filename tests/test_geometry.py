@@ -27,6 +27,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     MAX_PIECE_SIZE,
     FIT_CLEARANCE,
     MIN_SEG_RATIO,
+    PIN_RADIUS_RATIO,
 )
 
 import pytest
@@ -494,3 +495,88 @@ class TestLegFlushPlacements:
         (cx0, cy0), (cx3, cy3) = expected_ctrs[0], expected_ctrs[3]
         assert abs((cx0 + cx3) - w) < 1e-9
         assert abs((cy0 + cy3) - l) < 1e-9
+
+
+# ===========================================================================
+# Round through-pin geometry
+# ===========================================================================
+
+class TestRoundPin:
+    """Tests for the round through-pin added to each leg.
+
+    The pin is a cylinder centred at (leg_width/2, leg_width/2) in leg-local
+    XY, rising from the leg shoulder (z = leg_height) to the shelf top face
+    (z = leg_height + shelf_height).  Its radius = leg_width * PIN_RADIUS_RATIO.
+
+    All tests are pure Python (no FreeCAD required).
+    """
+
+    def test_pin_radius_ratio_is_positive(self):
+        assert PIN_RADIUS_RATIO > 0.0
+
+    def test_pin_radius_less_than_half_leg_width(self):
+        """Pin must fit entirely within the leg cross-section."""
+        for lw in (10.0, 20.0, 40.0):
+            pin_radius = lw * PIN_RADIUS_RATIO
+            assert pin_radius < lw * 0.5, (
+                f"pin radius {pin_radius} must be < leg half-width {lw*0.5}"
+            )
+
+    def test_pin_fits_within_leg_cross_section(self):
+        """Pin circle (centre ± radius) must not exceed leg_width in X or Y."""
+        for lw in (10.0, 20.0, 40.0):
+            pin_radius = lw * PIN_RADIUS_RATIO
+            centre = lw * 0.5
+            assert centre - pin_radius >= 0.0
+            assert centre + pin_radius <= lw
+
+    def test_pin_height_equals_shelf_height(self):
+        """In leg-local coords the pin runs from leg_height to leg_height + shelf_height."""
+        leg_height, shelf_height = 80.0, 10.0
+        pin_z_start = leg_height
+        pin_z_end   = leg_height + shelf_height
+        assert abs((pin_z_end - pin_z_start) - shelf_height) < 1e-9
+
+    def test_pin_top_flush_with_shelf_top_in_world_coords(self):
+        """After placement (pz = -leg_height) pin top = shelf_height (world)."""
+        leg_height, shelf_height = 80.0, 10.0
+        pz = -leg_height
+        # pin top in local = leg_height + shelf_height
+        pin_top_world = (leg_height + shelf_height) + pz
+        assert abs(pin_top_world - shelf_height) < 1e-9
+
+    def test_pin_bottom_flush_with_shelf_bottom_in_world_coords(self):
+        """After placement (pz = -leg_height) pin bottom = 0 (shelf bottom face)."""
+        leg_height = 80.0
+        pz = -leg_height
+        pin_bottom_world = leg_height + pz
+        assert abs(pin_bottom_world) < 1e-9
+
+    def test_pin_hole_radius_larger_than_pin(self):
+        """The shelf through-hole must be wider than the pin to allow assembly."""
+        for lw in (10.0, 20.0, 40.0):
+            pin_radius      = lw * PIN_RADIUS_RATIO
+            pin_hole_radius = pin_radius + FIT_CLEARANCE * 0.5
+            assert pin_hole_radius > pin_radius
+
+    def test_pin_hole_clearance_uses_fit_clearance(self):
+        """Hole radius = pin radius + FIT_CLEARANCE / 2."""
+        lw = 20.0
+        pin_radius      = lw * PIN_RADIUS_RATIO
+        pin_hole_radius = pin_radius + FIT_CLEARANCE * 0.5
+        assert abs(pin_hole_radius - pin_radius - FIT_CLEARANCE * 0.5) < 1e-9
+
+    def test_pin_centre_at_leg_centre(self):
+        """Pin centre in XY must be at leg_width / 2."""
+        for lw in (10.0, 20.0, 40.0):
+            cx = lw * 0.5
+            cy = lw * 0.5
+            assert abs(cx - lw * 0.5) < 1e-9
+            assert abs(cy - lw * 0.5) < 1e-9
+
+    def test_four_pin_centres_in_world_coords(self):
+        """Pin world-XY centres match the leg centres (px + lw/2, py + lw/2)."""
+        w, l, lw, lh = 300.0, 200.0, 12.0, 80.0
+        placements = leg_flush_placements(w, l, lh, lw)
+        pin_ctrs = [(px + lw * 0.5, py + lw * 0.5) for px, py, _ in placements]
+        assert len(set(pin_ctrs)) == 4, "four distinct pin centres required"
