@@ -580,3 +580,120 @@ class TestRoundPin:
         placements = leg_flush_placements(w, l, lh, lw)
         pin_ctrs = [(px + lw * 0.5, py + lw * 0.5) for px, py, _ in placements]
         assert len(set(pin_ctrs)) == 4, "four distinct pin centres required"
+
+
+# ===========================================================================
+# is_excluded – leg zone suppression
+# ===========================================================================
+
+class TestIsExcludedLegZones:
+    """Tests that hex cells overlapping leg support rectangles are excluded.
+
+    All tests are pure Python (no FreeCAD required).
+    """
+
+    # Shared base params: large shelf, no cuts, small hex so perimeter/bridge
+    # exclusions don't interfere with the leg-zone tests.
+    _base = dict(
+        hex_size=4.0,
+        perim_w=6.0,
+        total_w=300.0,
+        total_l=200.0,
+        x_cuts=[],
+        y_cuts=[],
+    )
+
+    def _call(self, cx, cy, leg_zones, **override):
+        params = {**self._base, **override}
+        return is_excluded(
+            cx, cy,
+            params['hex_size'],
+            params['perim_w'],
+            params['total_w'],
+            params['total_l'],
+            params['x_cuts'],
+            params['y_cuts'],
+            leg_zones=leg_zones,
+        )
+
+    # ── no leg zones → no extra exclusion ────────────────────────────
+
+    def test_no_leg_zones_centre_not_excluded(self):
+        """Without leg zones a centre-of-shelf hex must not be excluded."""
+        assert not self._call(150.0, 100.0, leg_zones=[])
+
+    # ── hex fully inside a leg zone ───────────────────────────────────
+
+    def test_hex_centre_inside_zone_excluded(self):
+        """A hex whose centre lies inside a leg zone must be excluded."""
+        zone = (0.0, 0.0, 20.0, 20.0)   # BL leg, 20×20
+        cx, cy = 10.0, 10.0              # dead centre of zone
+        assert self._call(cx, cy, leg_zones=[zone])
+
+    # ── hex overlaps zone edge ────────────────────────────────────────
+
+    def test_hex_touching_zone_right_edge_excluded(self):
+        """Hex bounding circle that overlaps the right edge of a zone is excluded."""
+        zone = (0.0, 0.0, 20.0, 20.0)
+        # hex_size=4; centre at (23, 10): cx - r = 19 < lx1=20, so circle reaches into zone
+        assert self._call(23.0, 10.0, leg_zones=[zone])
+
+    def test_hex_just_clear_of_zone_not_excluded(self):
+        """Hex that doesn't touch any zone must not be excluded by leg zones."""
+        zone = (0.0, 0.0, 20.0, 20.0)
+        # hex_size=4; centre at (28, 10): cx - r = 24 > 20 → clear
+        assert not self._call(28.0, 10.0, leg_zones=[zone])
+
+    def test_hex_touching_zone_top_edge_excluded(self):
+        zone = (0.0, 0.0, 20.0, 20.0)
+        # hex_size=4; centre at (10, 23): cy - r = 19 < ly1=20, so circle reaches into zone
+        assert self._call(10.0, 23.0, leg_zones=[zone])
+
+    def test_hex_just_clear_of_zone_top_not_excluded(self):
+        zone = (0.0, 0.0, 20.0, 20.0)
+        # cy - r = 24 > 20 → clear of top edge
+        assert not self._call(10.0, 28.0, leg_zones=[zone])
+
+    # ── multiple zones, hit second ────────────────────────────────────
+
+    def test_hit_second_of_two_zones_excluded(self):
+        zone_bl = (0.0,   0.0,   20.0,  20.0)   # BL
+        zone_tr = (280.0, 180.0, 300.0, 200.0)  # TR
+        # Centre close to TR zone; well away from BL zone
+        assert self._call(277.0, 182.0, leg_zones=[zone_bl, zone_tr])
+
+    def test_between_two_zones_not_excluded(self):
+        zone_bl = (0.0,   0.0,   20.0,  20.0)
+        zone_tr = (280.0, 180.0, 300.0, 200.0)
+        # Centre at (150, 100): far from both zones
+        assert not self._call(150.0, 100.0, leg_zones=[zone_bl, zone_tr])
+
+    # ── four corner zones derived from real placements ────────────────
+
+    def test_four_real_corner_zones_exclude_hex_at_each_corner(self):
+        """Leg zones computed from real placements must exclude hexes at each corner."""
+        w, l, lw, lh = 300.0, 200.0, 20.0, 80.0
+        placements = leg_flush_placements(w, l, lh, lw)
+        zones = [
+            (px, py, px + lw, py + lw)
+            for px, py, _ in placements
+        ]
+        # A hex at the centre of each leg square must be excluded
+        for (px, py, lx1, ly1) in zones:
+            cx = (px + lx1) * 0.5
+            cy = (py + ly1) * 0.5
+            assert self._call(cx, cy, leg_zones=zones,
+                              total_w=w, total_l=l), (
+                f"hex at ({cx}, {cy}) should be excluded by leg zone"
+            )
+
+    def test_four_real_corner_zones_allow_centre_hex(self):
+        """A hex at the centre of the shelf must not be excluded by leg zones."""
+        w, l, lw, lh = 300.0, 200.0, 20.0, 80.0
+        placements = leg_flush_placements(w, l, lh, lw)
+        zones = [
+            (px, py, px + lw, py + lw)
+            for px, py, _ in placements
+        ]
+        assert not self._call(w * 0.5, l * 0.5, leg_zones=zones,
+                              total_w=w, total_l=l)

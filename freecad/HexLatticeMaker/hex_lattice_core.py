@@ -119,6 +119,7 @@ def is_excluded(
     total_l: float,
     x_cuts: list,
     y_cuts: list,
+    leg_zones: list = (),
 ) -> bool:
     """Return True if a hex hole centered at (cx, cy) should be suppressed.
 
@@ -126,6 +127,10 @@ def is_excluded(
     ~~~~~~~~~~~~~~~~
     * Outer perimeter bands (within ``perim_w`` of any edge).
     * Bridge bands at every cut (within ``perim_w/2`` of any cut line).
+    * Leg support areas: axis-aligned rectangles supplied via *leg_zones*
+      as ``(x0, y0, x1, y1)`` tuples.  Any hex whose bounding circle
+      (radius = ``hex_size``) overlaps a leg zone is suppressed so that
+      the solid leg-corner material is preserved.
 
     A hex is suppressed if its *bounding circle* (radius = hex_size) overlaps
     any exclusion zone.
@@ -145,6 +150,11 @@ def is_excluded(
             return True
     for yc in y_cuts:
         if abs(cy - yc) < r + bridge_half:
+            return True
+
+    # Leg support zones (axis-aligned rectangles)
+    for lx0, ly0, lx1, ly1 in leg_zones:
+        if cx + r > lx0 and cx - r < lx1 and cy + r > ly0 and cy - r < ly1:
             return True
 
     return False
@@ -353,6 +363,7 @@ def make_piece(
     wall_t: float,
     x_cuts: list,
     y_cuts: list,
+    leg_zones: list = (),
 ) -> object:  # returns Part.Shape
     """Build one interlocking piece of the hex-lattice panel.
 
@@ -367,6 +378,9 @@ def make_piece(
     wall_t   : minimum wall thickness between adjacent hex cells
     x_cuts   : list of X-cut positions
     y_cuts   : list of Y-cut positions
+    leg_zones: list of ``(x0, y0, x1, y1)`` rectangles that must remain
+               solid (e.g. leg-corner footprints).  Hex cells whose bounding
+               circle overlaps any zone are suppressed.
     """
     import FreeCAD as App
     import Part
@@ -399,7 +413,8 @@ def make_piece(
 
         for cx, cy in centers:
             if is_excluded(cx, cy, hex_size, perim_w,
-                           total_w, total_l, x_cuts, y_cuts):
+                           total_w, total_l, x_cuts, y_cuts,
+                           leg_zones):
                 continue
             # Hex must overlap this piece's region
             if (cx + hex_size < x0 or cx - hex_size > x1 or
@@ -725,6 +740,14 @@ def create_shelf_with_legs(
         for px, py, _pz in placements
     ]
 
+    # Leg exclusion zones: the full square footprint of each leg.
+    # Hex cells whose bounding circle overlaps a zone are suppressed so
+    # that the solid leg-corner material is never interrupted by a hex hole.
+    leg_zones = [
+        (px, py, px + leg_width, py + leg_width)
+        for px, py, _pz in placements
+    ]
+
     hole_size = leg_width + FIT_CLEARANCE
     hole_half = hole_size * 0.5
 
@@ -767,6 +790,7 @@ def create_shelf_with_legs(
                 height, perim_width, hex_size,
                 wall_thickness,
                 x_cuts, y_cuts,
+                leg_zones=leg_zones,
             )
 
             # Cut blind sockets and round through-holes that intersect this piece
