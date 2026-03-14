@@ -39,6 +39,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     SnubSquareTilingProvider,
     ElongatedTriangularTilingProvider,
     TruncatedHexagonalTilingProvider,
+    SmallRhombitrihexagonalTilingProvider,
 )
 
 import pytest
@@ -809,13 +810,13 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_eight_entries(self):
-        assert len(LATTICE_TYPES) == 8
+    def test_lattice_types_has_nine_entries(self):
+        assert len(LATTICE_TYPES) == 9
 
     def test_required_keys_present(self):
         for key in ("hexagonal", "square", "triangular", "trihexagonal",
                     "truncated_square", "snub_square", "elongated_triangular",
-                    "truncated_hexagonal"):
+                    "truncated_hexagonal", "small_rhombitrihexagonal"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
 
     def test_all_display_names_are_strings(self):
@@ -823,14 +824,15 @@ class TestLatticeTypes:
             assert isinstance(name, str) and name, f"Bad display name for {key!r}"
 
     def test_get_tiling_provider_returns_correct_types(self):
-        assert isinstance(get_tiling_provider("hexagonal"),             HexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("square"),                SquareTilingProvider)
-        assert isinstance(get_tiling_provider("triangular"),            TriangularTilingProvider)
-        assert isinstance(get_tiling_provider("trihexagonal"),          TrihexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("truncated_square"),      TruncatedSquareTilingProvider)
-        assert isinstance(get_tiling_provider("snub_square"),           SnubSquareTilingProvider)
-        assert isinstance(get_tiling_provider("elongated_triangular"),  ElongatedTriangularTilingProvider)
-        assert isinstance(get_tiling_provider("truncated_hexagonal"),   TruncatedHexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("hexagonal"),                 HexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("square"),                    SquareTilingProvider)
+        assert isinstance(get_tiling_provider("triangular"),                TriangularTilingProvider)
+        assert isinstance(get_tiling_provider("trihexagonal"),              TrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_square"),          TruncatedSquareTilingProvider)
+        assert isinstance(get_tiling_provider("snub_square"),               SnubSquareTilingProvider)
+        assert isinstance(get_tiling_provider("elongated_triangular"),      ElongatedTriangularTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_hexagonal"),       TruncatedHexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("small_rhombitrihexagonal"),  SmallRhombitrihexagonalTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
         with pytest.raises(ValueError):
@@ -1503,4 +1505,148 @@ class TestTilingCells:
         assert abs(low_cells - high_cells) <= 3, (
             f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
             "Possible oblique drift in truncated_hexagonal tiling."
+        )
+
+    # ── small rhombitrihexagonal (3.4.6.4) ───────────────────────────────
+
+    def test_small_rhombitrihexagonal_non_empty(self):
+        """Small-rhombitrihexagonal tiling must return cells for a valid region."""
+        assert len(self._cells("small_rhombitrihexagonal")) > 0
+
+    def test_n_sides_correct_for_small_rhombitrihexagonal(self):
+        """Every polygon must be a triangle (3), square (4), or hexagon (6)."""
+        for _cx, _cy, n, _rot in self._cells("small_rhombitrihexagonal"):
+            assert n in (3, 4, 6), (
+                f"Unexpected n_sides={n} in small_rhombitrihexagonal tiling"
+            )
+
+    def test_small_rhombitrihexagonal_has_all_three_polygon_types(self):
+        """Tiling must contain triangles, squares, and hexagons."""
+        sides = {n for _cx, _cy, n, _rot in self._cells("small_rhombitrihexagonal")}
+        assert 3  in sides, "Missing triangles (n=3) in small_rhombitrihexagonal"
+        assert 4  in sides, "Missing squares (n=4) in small_rhombitrihexagonal"
+        assert 6  in sides, "Missing hexagons (n=6) in small_rhombitrihexagonal"
+
+    def test_small_rhombitrihexagonal_polygon_ratios(self):
+        """In a large region sq/hex ≈ 3.0 and tri/hex ≈ 2.0 (within 10%)."""
+        p     = get_tiling_provider("small_rhombitrihexagonal")
+        cells = p.get_cells(0.0, 500.0, 0.0, 500.0, 8.0, 1.5)
+        n_hex = sum(1 for _cx, _cy, n, _rot in cells if n == 6)
+        n_sq  = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_hex > 0, "No hexagons in small_rhombitrihexagonal tiling"
+        assert abs(n_sq  / n_hex - 3.0) < 0.10 * 3.0, (
+            f"sq/hex={n_sq/n_hex:.4f}, expected≈3.0"
+        )
+        assert abs(n_tri / n_hex - 2.0) < 0.10 * 2.0, (
+            f"tri/hex={n_tri/n_hex:.4f}, expected≈2.0"
+        )
+
+    def test_small_rhombitrihexagonal_hex_rotation(self):
+        """Hexagons are flat-top with first vertex at 0° (rot=0.0)."""
+        hex_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("small_rhombitrihexagonal") if n == 6
+        }
+        assert 0.0 in hex_rots, (
+            "Missing flat-top hexagons (rot=0°) in small_rhombitrihexagonal"
+        )
+
+    def test_small_rhombitrihexagonal_square_rotations(self):
+        """Squares must appear at rotations 75°, 135°, and 195°."""
+        sq_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("small_rhombitrihexagonal") if n == 4
+        }
+        assert 75.0  in sq_rots, "Missing square rot=75° in small_rhombitrihexagonal"
+        assert 135.0 in sq_rots, "Missing square rot=135° in small_rhombitrihexagonal"
+        assert 195.0 in sq_rots, "Missing square rot=195° in small_rhombitrihexagonal"
+
+    def test_small_rhombitrihexagonal_triangle_rotations(self):
+        """Triangles must appear at rotations 60° and 0°."""
+        tri_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("small_rhombitrihexagonal") if n == 3
+        }
+        assert 60.0 in tri_rots, "Missing triangle rot=60° in small_rhombitrihexagonal"
+        assert 0.0  in tri_rots, "Missing triangle rot=0° in small_rhombitrihexagonal"
+
+    def test_all_centres_within_region_small_rhombitrihexagonal(self):
+        """All polygon centres must lie strictly within the query region."""
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("small_rhombitrihexagonal"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} outside [{r['gx0']}, {r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} outside [{r['gy0']}, {r['gy1']}]"
+
+    def test_no_duplicate_centres_small_rhombitrihexagonal(self):
+        """No two cells must share the same centre point."""
+        pts = [
+            (round(cx, 6), round(cy, 6))
+            for cx, cy, _n, _rot in self._cells("small_rhombitrihexagonal")
+        ]
+        assert len(pts) == len(set(pts)), (
+            "Duplicate cell centres in small_rhombitrihexagonal tiling"
+        )
+
+    def test_small_rhombitrihexagonal_circumradius(self):
+        """Circumradius equals cell_size (regular hexagon circumradius = side)."""
+        p = get_tiling_provider("small_rhombitrihexagonal")
+        for s in (5.0, 8.0, 12.0):
+            assert abs(p.cell_circumradius(s) - s) < 1e-9
+
+    def test_small_rhombitrihexagonal_empty_region(self):
+        """Zero-width and zero-height regions must return an empty list."""
+        p = get_tiling_provider("small_rhombitrihexagonal")
+        assert p.get_cells(50.0, 50.0, 0.0, 100.0, 8.0, 1.5) == []
+        assert p.get_cells(0.0, 100.0, 50.0, 50.0, 8.0, 1.5) == []
+
+    def test_small_rhombitrihexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the nearest centre-to-centre distance equals
+        step·(√3+3)/6 (= a/(2·√3)) — the distance between an adjacent
+        Square B and Triangle B that share a vertical edge."""
+        cell_size = 9.0
+        sq3       = math.sqrt(3)
+        step      = cell_size          # wall_t = 0
+        a         = step * (1.0 + sq3)
+        expected  = a / (2.0 * sq3)   # = step·(√3+3)/6
+
+        p   = get_tiling_provider("small_rhombitrihexagonal")
+        cs  = p.get_cells(0.0, 200.0, 0.0, 200.0, cell_size, 0.0)
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        min_dist = float("inf")
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Small-rhombitrihexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_small_rhombitrihexagonal_coverage_uniform_across_y(self):
+        """Tiling must cover the region uniformly at all Y positions.
+
+        The positive A1y = a/2 introduces an upward y-drift per column index.
+        Without extra_rows compensation, cells at the bottom of wide regions
+        would be missed.
+        """
+        p = get_tiling_provider("small_rhombitrihexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        a    = step * (1.0 + sq3)
+        strip_height = a   # A2y — one row spacing
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strip of small_rhombitrihexagonal tiling"
+        assert high_cells > 0, "No cells in top strip of small_rhombitrihexagonal tiling"
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible y-drift in small_rhombitrihexagonal tiling."
         )

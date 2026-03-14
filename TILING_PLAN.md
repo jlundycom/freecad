@@ -83,6 +83,7 @@ due to the oblique coordinate system.
 | `snub_square` | Snub Square (3.3.4.3.4) | `s{4}` | Regular square + equilateral triangle |
 | `elongated_triangular` | Elongated Triangular (3.3.3.4.4) | — | Regular square + equilateral triangle |
 | `truncated_hexagonal` | Truncated Hexagonal (3.12.12) | `t{6}` | Equilateral triangle + regular 12-gon |
+| `small_rhombitrihexagonal` | Small Rhombitrihexagonal (3.4.6.4) | `r{3,6}` | Equilateral triangle + square + regular hexagon |
 
 ---
 
@@ -148,12 +149,26 @@ analytically).
 
 ---
 
-### Small Rhombitrihexagonal (3.4.6.4)  — symbol `r{3,6}`
+### ~~Small Rhombitrihexagonal (3.4.6.4)~~  — **DONE** (key `small_rhombitrihexagonal`)
 
-Triangles, squares, and hexagons.
+Implemented in `SmallRhombitrihexagonalTilingProvider`.
 
-* **Lattice**: triangular.
-* **Basis**: 1 triangle + 3 squares + 1 hexagon per unit cell.
+Hexagonal Bravais lattice with primitive vectors `A1 = step·(√3·(1+√3)/2, (1+√3)/2)`,
+`A2 = step·(0, 1+√3)` where `a = step·(1+√3)` is the lattice period.
+
+All six edges of every hexagon are shared with squares; triangles fill the corner
+gaps between adjacent square pairs at each hex vertex.  Each unit cell holds:
+
+* Hexagon at `(0, 0)`, rot=0° (flat-top)
+* Square A at `(a·√3/4, a/4)`, rot=75° — angle 30° from hex centre
+* Square B at `(0, a/2)`, rot=135° — angle 90° from hex centre
+* Square C at `(−a·√3/4, a/4)`, rot=195° — angle 150° from hex centre
+* Triangle A at `(a/√3, 0)`, rot=60° — angle 0° from hex centre
+* Triangle B at `(a/(2·√3), a/2)`, rot=0° — angle 60° from hex centre
+
+The positive `A1y = a/2` produces an upward y-drift per column index; the row
+range is extended downward by `extra_rows = ⌈n_cols/2⌉ + 2` to compensate.
+Polygon ratio: 2 triangles : 3 squares : 1 hexagon per unit cell ✓.
 
 ---
 

@@ -89,9 +89,10 @@ LATTICE_TYPES = {
     "triangular":             "Triangular (3.3.3.3.3.3)",
     "trihexagonal":           "Trihexagonal (3.6.3.6)",
     "truncated_square":       "Truncated Square (4.8.8)",
-    "snub_square":            "Snub Square (3.3.4.3.4)",
-    "elongated_triangular":   "Elongated Triangular (3.3.3.4.4)",
-    "truncated_hexagonal":    "Truncated Hexagonal (3.12.12)",
+    "snub_square":                 "Snub Square (3.3.4.3.4)",
+    "elongated_triangular":        "Elongated Triangular (3.3.3.4.4)",
+    "truncated_hexagonal":         "Truncated Hexagonal (3.12.12)",
+    "small_rhombitrihexagonal":    "Small Rhombitrihexagonal (3.4.6.4)",
 }
 
 
@@ -773,16 +774,139 @@ class TruncatedHexagonalTilingProvider(TilingProvider):
         return cells
 
 
+class SmallRhombitrihexagonalTilingProvider(TilingProvider):
+    """Semi-regular small rhombitrihexagonal tiling — Schläfli vertex figure 3.4.6.4.
+
+    Equilateral triangles, squares, and regular hexagons sharing the same
+    edge length.  At every vertex one triangle, two squares, and one hexagon
+    meet in the cyclic order 3, 4, 6, 4 (interior angles 60°+90°+120°+90°=360°).
+
+    All six edges of each hexagon are shared with squares; triangles fill the
+    corner gaps between each adjacent pair of squares at every hex vertex.
+    Each triangle has all three of its edges shared with squares (it touches
+    no hexagon directly).
+
+    The layout uses a hexagonal Bravais lattice with primitive vectors::
+
+        A1 = step · ( √3·(1+√3)/2,  (1+√3)/2  )
+        A2 = step · ( 0,             1+√3       )
+
+    where ``step = cell_size + wall_t`` and every hexagon occupies one
+    lattice point.  The lattice period is ``a = step·(1+√3)``.
+
+    Each unit cell (one lattice point) holds six polygons:
+
+    * Hexagon  : offset ``(0,         0      )``  n=6, rot=0°
+    * Square A : offset ``(a·√3/4,    a/4    )``  n=4, rot=75°   (angle 30°)
+    * Square B : offset ``(0,         a/2    )``  n=4, rot=135°  (angle 90°)
+    * Square C : offset ``(−a·√3/4,   a/4    )``  n=4, rot=195°  (angle 150°)
+    * Triangle A: offset ``(a/√3,     0      )``  n=3, rot=60°   (angle 0°)
+    * Triangle B: offset ``(a/(2·√3), a/2    )``  n=3, rot=0°    (angle 60°)
+
+    The positive ``A1y = a/2`` introduces an upward y-drift of ``a/2`` per
+    column.  Over ``n_cols`` columns the total drift is ``n_cols·a/2``.  In
+    row units (one row = ``A2y = a``) that is ``n_cols/2``.  The row range is
+    extended downward by ``extra_rows = ⌈n_cols/2⌉ + 2`` to ensure full
+    coverage at all X positions.  There is no x-drift from the row index
+    (``A2x = 0``), so no extra column compensation is needed.
+    """
+
+    display_name = "Small Rhombitrihexagonal (3.4.6.4)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Largest polygon is the hexagon; circumradius of a regular hexagon
+        # with side s is s itself.
+        return cell_size
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        a    = step * (1.0 + sq3)   # lattice period = step·(1+√3)
+
+        # Primitive lattice vectors
+        # A1 = (a·√3/2, a/2)  — diagonal (no pure-X step)
+        # A2 = (0,      a  )  — purely vertical
+        A1x = a * sq3 / 2.0
+        A1y = a / 2.0
+        A2y = a                     # A2x = 0 (no x-drift per row)
+
+        # Basis offsets from the lattice point (lx, ly)
+        # --- Squares at angles 30°, 90°, 150° from the hex centre ---
+        sq1_dx =  A1x / 2.0         # = a·√3/4
+        sq1_dy =  A1y / 2.0         # = a/4
+        sq2_dx =  0.0
+        sq2_dy =  A2y / 2.0         # = a/2
+        sq3_dx = -A1x / 2.0         # = -a·√3/4
+        sq3_dy = (A2y - A1y) / 2.0  # = a/4
+
+        # --- Triangles at angles 0° and 60° from the hex centre ---
+        tri1_dx =  a / sq3           # = a/√3
+        tri1_dy =  0.0
+        tri2_dx =  a / (2.0 * sq3)  # = a/(2·√3)
+        tri2_dy =  a / 2.0
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_cols = int((gx1 - gx0) / A1x) + 3
+        n_rows = int((gy1 - gy0) / A2y) + 3
+
+        # A1y > 0: upward y-drift accumulates as column index increases.
+        # For col = n_cols, the y-baseline is n_cols·A1y = n_cols·a/2.
+        # To place polygon centres at the *bottom* of the region with this
+        # offset, negative row values are needed.  In row units (A2y = a):
+        # row_min = -n_cols/2.  Extend row range downward by extra_rows.
+        extra_rows = int(math.ceil(n_cols / 2.0)) + 2
+
+        for col in range(-1, n_cols + 1):
+            lx = gx0 + col * A1x    # x depends only on col (A2x = 0)
+            for row in range(-1 - extra_rows, n_rows + 1):
+                ly = gy0 + col * A1y + row * A2y
+
+                # Hexagon (flat-top) — first vertex at 0° (rightmost)
+                if gx0 <= lx <= gx1 and gy0 <= ly <= gy1:
+                    cells.append((lx, ly, 6, 0.0))
+
+                # Square A — at angle 30° from hex centre, rot=75°
+                cx, cy = lx + sq1_dx, ly + sq1_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 75.0))
+
+                # Square B — at angle 90° from hex centre, rot=135°
+                cx, cy = lx + sq2_dx, ly + sq2_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 135.0))
+
+                # Square C — at angle 150° from hex centre, rot=195°
+                cx, cy = lx + sq3_dx, ly + sq3_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 195.0))
+
+                # Triangle A — at angle 0° from hex centre, rot=60°
+                cx, cy = lx + tri1_dx, ly + tri1_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 60.0))
+
+                # Triangle B — at angle 60° from hex centre, rot=0°
+                cx, cy = lx + tri2_dx, ly + tri2_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 0.0))
+
+        return cells
+
+
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
-    "hexagonal":             HexagonalTilingProvider(),
-    "square":                SquareTilingProvider(),
-    "triangular":            TriangularTilingProvider(),
-    "trihexagonal":          TrihexagonalTilingProvider(),
-    "truncated_square":      TruncatedSquareTilingProvider(),
-    "snub_square":           SnubSquareTilingProvider(),
-    "elongated_triangular":  ElongatedTriangularTilingProvider(),
-    "truncated_hexagonal":   TruncatedHexagonalTilingProvider(),
+    "hexagonal":                  HexagonalTilingProvider(),
+    "square":                     SquareTilingProvider(),
+    "triangular":                 TriangularTilingProvider(),
+    "trihexagonal":               TrihexagonalTilingProvider(),
+    "truncated_square":           TruncatedSquareTilingProvider(),
+    "snub_square":                SnubSquareTilingProvider(),
+    "elongated_triangular":       ElongatedTriangularTilingProvider(),
+    "truncated_hexagonal":        TruncatedHexagonalTilingProvider(),
+    "small_rhombitrihexagonal":   SmallRhombitrihexagonalTilingProvider(),
 }
 
 
