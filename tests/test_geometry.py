@@ -42,6 +42,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     ElongatedTriangularTilingProvider,
     TruncatedHexagonalTilingProvider,
     SmallRhombitrihexagonalTilingProvider,
+    GreatRhombitrihexagonalTilingProvider,
 )
 
 import pytest
@@ -812,13 +813,14 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_nine_entries(self):
-        assert len(LATTICE_TYPES) == 9
+    def test_lattice_types_has_ten_entries(self):
+        assert len(LATTICE_TYPES) == 10
 
     def test_required_keys_present(self):
         for key in ("hexagonal", "square", "triangular", "trihexagonal",
                     "truncated_square", "snub_square", "elongated_triangular",
-                    "truncated_hexagonal", "small_rhombitrihexagonal"):
+                    "truncated_hexagonal", "small_rhombitrihexagonal",
+                    "great_rhombitrihexagonal"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
 
     def test_all_display_names_are_strings(self):
@@ -835,6 +837,7 @@ class TestLatticeTypes:
         assert isinstance(get_tiling_provider("elongated_triangular"),      ElongatedTriangularTilingProvider)
         assert isinstance(get_tiling_provider("truncated_hexagonal"),       TruncatedHexagonalTilingProvider)
         assert isinstance(get_tiling_provider("small_rhombitrihexagonal"),  SmallRhombitrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("great_rhombitrihexagonal"),  GreatRhombitrihexagonalTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
         with pytest.raises(ValueError):
@@ -1651,6 +1654,167 @@ class TestTilingCells:
         assert abs(low_cells - high_cells) <= 3, (
             f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
             "Possible y-drift in small_rhombitrihexagonal tiling."
+        )
+
+    # ── great rhombitrihexagonal (4.6.12) ────────────────────────────────
+
+    def test_great_rhombitrihexagonal_non_empty(self):
+        """Great-rhombitrihexagonal tiling must return cells for a valid region."""
+        assert len(self._cells("great_rhombitrihexagonal")) > 0
+
+    def test_n_sides_correct_for_great_rhombitrihexagonal(self):
+        """Cells must be squares (n=4), hexagons (n=6), or dodecagons (n=12)."""
+        for _cx, _cy, n, _rot in self._cells("great_rhombitrihexagonal"):
+            assert n in (4, 6, 12), (
+                f"Unexpected n_sides={n} in great_rhombitrihexagonal tiling"
+            )
+
+    def test_great_rhombitrihexagonal_has_all_three_polygon_types(self):
+        """Great-rhombitrihexagonal must contain squares, hexagons, and dodecagons."""
+        sides = {n for _cx, _cy, n, _rot in self._cells("great_rhombitrihexagonal")}
+        assert 4  in sides, "Missing squares (n=4) in great_rhombitrihexagonal"
+        assert 6  in sides, "Missing hexagons (n=6) in great_rhombitrihexagonal"
+        assert 12 in sides, "Missing dodecagons (n=12) in great_rhombitrihexagonal"
+
+    def test_great_rhombitrihexagonal_polygon_ratios(self):
+        """Per unit cell: 3 squares, 2 hexagons, 1 dodecagon (ratio 3:2:1).
+
+        Boundary cropping can shave cells from the finite test region; a 20 %
+        tolerance prevents false positives from boundary effects while still
+        catching any structural bug (e.g. missing an entire polygon type).
+        """
+        p     = get_tiling_provider("great_rhombitrihexagonal")
+        cells = p.get_cells(0.0, 500.0, 0.0, 500.0, **self._cell)
+        n_sq   = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        n_hex  = sum(1 for _cx, _cy, n, _rot in cells if n == 6)
+        n_dodec = sum(1 for _cx, _cy, n, _rot in cells if n == 12)
+        assert n_dodec > 0, "No dodecagons in great_rhombitrihexagonal tiling"
+        # sq : hex : dodec ≈ 3 : 2 : 1
+        assert abs(n_hex / n_dodec - 2.0) < 0.20, (
+            f"hex/dodec ratio {n_hex/n_dodec:.3f} ≠ expected ≈ 2.0"
+        )
+        assert abs(n_sq / n_hex - 1.5) < 0.20, (
+            f"sq/hex ratio {n_sq/n_hex:.3f} ≠ expected ≈ 1.5"
+        )
+
+    def test_great_rhombitrihexagonal_dodec_rotation(self):
+        """All dodecagons must have rotation 15° (first vertex at 15°)."""
+        dodec_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("great_rhombitrihexagonal") if n == 12
+        }
+        assert 15.0 in dodec_rots, (
+            "Missing dodecagons with rot=15° in great_rhombitrihexagonal"
+        )
+
+    def test_great_rhombitrihexagonal_hex_rotation(self):
+        """All hexagons must have rotation 0° (flat-top orientation)."""
+        hex_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("great_rhombitrihexagonal") if n == 6
+        }
+        assert 0.0 in hex_rots, (
+            "Missing hexagons with rot=0° in great_rhombitrihexagonal"
+        )
+        assert hex_rots == {0.0}, (
+            f"Unexpected hexagon rotations in great_rhombitrihexagonal: {hex_rots}"
+        )
+
+    def test_great_rhombitrihexagonal_square_rotations(self):
+        """Three distinct square orientations (45°, 105°, 165°) must be present."""
+        sq_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("great_rhombitrihexagonal") if n == 4
+        }
+        assert 45.0  in sq_rots, "Missing square rot=45°  in great_rhombitrihexagonal"
+        assert 105.0 in sq_rots, "Missing square rot=105° in great_rhombitrihexagonal"
+        assert 165.0 in sq_rots, "Missing square rot=165° in great_rhombitrihexagonal"
+
+    def test_all_centres_within_region_great_rhombitrihexagonal(self):
+        """Every cell centre must lie within the requested bounds."""
+        gx0, gx1, gy0, gy1 = 10.0, 190.0, 10.0, 190.0
+        p = get_tiling_provider("great_rhombitrihexagonal")
+        for cx, cy, _n, _rot in p.get_cells(gx0, gx1, gy0, gy1, **self._cell):
+            assert gx0 <= cx <= gx1, f"cx={cx} out of [{gx0}, {gx1}]"
+            assert gy0 <= cy <= gy1, f"cy={cy} out of [{gy0}, {gy1}]"
+
+    def test_no_duplicate_centres_great_rhombitrihexagonal(self):
+        """No two cells may share the same (cx, cy, n_sides) triple."""
+        seen = set()
+        for cx, cy, n, _rot in self._cells("great_rhombitrihexagonal"):
+            key = (round(cx, 6), round(cy, 6), n)
+            assert key not in seen, (
+                f"Duplicate cell centre {key} in great_rhombitrihexagonal tiling"
+            )
+            seen.add(key)
+
+    def test_great_rhombitrihexagonal_circumradius(self):
+        """Circumradius must equal cell_size·(√6+√2)/2 (dodecagon circumradius)."""
+        p = get_tiling_provider("great_rhombitrihexagonal")
+        sq6, sq2 = math.sqrt(6.0), math.sqrt(2.0)
+        for s in (5.0, 8.0, 12.0):
+            expected = s * (sq6 + sq2) / 2.0
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9, (
+                f"Circumradius({s}) = {p.cell_circumradius(s):.6f} ≠ {expected:.6f}"
+            )
+
+    def test_great_rhombitrihexagonal_empty_region(self):
+        """Zero-width and zero-height regions must return an empty list."""
+        p = get_tiling_provider("great_rhombitrihexagonal")
+        assert p.get_cells(50.0, 50.0, 0.0, 100.0, 8.0, 1.5) == []
+        assert p.get_cells(0.0, 100.0, 50.0, 50.0, 8.0, 1.5) == []
+
+    def test_great_rhombitrihexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the minimum centre-to-centre distance is step·(1+√3)/2.
+
+        The closest pair is a square and an adjacent hexagon that share a
+        vertex (square-A at (a/2, 0) and hexagon-A at (a/2, a√3/6));
+        their distance = a√3/6 = step·(3+√3)·√3/6 = step·(1+√3)/2.
+        """
+        cell_size = 9.0
+        sq3       = math.sqrt(3.0)
+        step      = cell_size          # wall_t = 0
+        expected  = step * (1.0 + sq3) / 2.0
+
+        p   = get_tiling_provider("great_rhombitrihexagonal")
+        cs  = p.get_cells(0.0, 200.0, 0.0, 200.0, cell_size, 0.0)
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        min_dist = float("inf")
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Great-rhombitrihexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_great_rhombitrihexagonal_coverage_uniform_across_x(self):
+        """Tiling must cover the region uniformly at all X positions.
+
+        The positive A2x = a/2 introduces a rightward x-drift per row index.
+        Without extra_cols compensation, cells at the left edge of tall regions
+        would be missed.
+        """
+        p = get_tiling_provider("great_rhombitrihexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3.0)
+        a    = step * (3.0 + sq3)
+        strip_width = a   # A1x — one column spacing
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        left_cells  = sum(1 for cx, _cy, _n, _rot in cells if cx < gx0 + 2 * strip_width)
+        right_cells = sum(1 for cx, _cy, _n, _rot in cells if cx > gx1 - 2 * strip_width)
+
+        assert left_cells  > 0, "No cells in left strip of great_rhombitrihexagonal tiling"
+        assert right_cells > 0, "No cells in right strip of great_rhombitrihexagonal tiling"
+        assert abs(left_cells - right_cells) <= 6, (
+            f"Cell counts differ: left={left_cells}, right={right_cells}. "
+            "Possible x-drift in great_rhombitrihexagonal tiling."
         )
 
 

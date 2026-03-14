@@ -94,6 +94,7 @@ LATTICE_TYPES = {
     "elongated_triangular":        "Elongated Triangular (3.3.3.4.4)",
     "truncated_hexagonal":         "Truncated Hexagonal (3.12.12)",
     "small_rhombitrihexagonal":    "Small Rhombitrihexagonal (3.4.6.4)",
+    "great_rhombitrihexagonal":    "Great Rhombitrihexagonal (4.6.12)",
 }
 
 
@@ -897,17 +898,142 @@ class SmallRhombitrihexagonalTilingProvider(TilingProvider):
         return cells
 
 
+class GreatRhombitrihexagonalTilingProvider(TilingProvider):
+    """Semi-regular great rhombitrihexagonal (truncated trihexagonal) tiling
+    — Schläfli vertex figure 4.6.12.
+
+    Squares, regular hexagons, and regular dodecagons sharing the same edge
+    length.  At every vertex one square, one hexagon, and one dodecagon meet
+    in the cyclic order 4, 6, 12 (interior angles 90°+120°+150°=360°).
+
+    Each dodecagon is surrounded by alternating squares and hexagons (6 of
+    each); each hexagon borders 3 squares and 3 dodecagons in alternation;
+    each square borders 2 hexagons and 2 dodecagons on its four edges.
+
+    The layout uses a hexagonal Bravais lattice with primitive vectors::
+
+        A1 = (a,   0       )
+        A2 = (a/2, a·√3/2  )
+
+    where ``a = step·(3+√3)`` and ``step = cell_size + wall_t``.  One
+    dodecagon occupies each lattice point.
+
+    Each unit cell holds **six** polygons:
+
+    * Dodecagon : at (0,     0       ) rot=15°
+    * Hexagon A : at (a/2,   a·√3/6  ) rot=0°   (direction 30° from 12-gon)
+    * Hexagon B : at (0,     a·√3/3  ) rot=0°   (direction 90° from 12-gon)
+    * Square A  : at (a/2,   0       ) rot=45°  (direction 0°)
+    * Square B  : at (a/4,   a·√3/4  ) rot=105° (direction 60°)
+    * Square C  : at (−a/4,  a·√3/4  ) rot=165° (direction 120°)
+
+    Per unit cell: **1 dodecagon, 2 hexagons, 3 squares** (ratio 1:2:3).
+
+    The positive ``A2x = a/2`` introduces a rightward x-drift of ``a/2``
+    per row.  Over ``n_rows`` rows the total drift is ``n_rows·a/2``.  In
+    column units (``A1x = a``) that is ``n_rows/2``.  The column range is
+    extended leftward by ``extra_cols = ⌈n_rows/2⌉ + 2`` to ensure full
+    coverage at all Y positions.  There is no y-drift from the column index
+    (``A1y = 0``), so no extra row compensation is needed.
+    """
+
+    display_name = "Great Rhombitrihexagonal (4.6.12)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Largest polygon is the dodecagon.
+        # R_12 = cell_size / (2·sin(π/12)) = cell_size·(√6+√2)/2
+        return cell_size * (math.sqrt(6.0) + math.sqrt(2.0)) / 2.0
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3.0)
+        a    = step * (3.0 + sq3)      # lattice period
+
+        # Primitive lattice vectors
+        # A1 = (a,   0    ) — purely horizontal
+        # A2 = (a/2, a√3/2) — diagonal; A2x = a/2 causes rightward x-drift per row
+        A1x = a
+        A2x = a / 2.0
+        A2y = a * sq3 / 2.0
+
+        # Basis offsets from the lattice point (lx, ly)
+        # --- Hexagons at directions 30° and 90° from the dodecagon centre ---
+        hex_a_dx =  a / 2.0           # direction 30°: (a/2,  a√3/6)
+        hex_a_dy =  a * sq3 / 6.0
+        hex_b_dx =  0.0               # direction 90°: (0,    a√3/3)
+        hex_b_dy =  a * sq3 / 3.0
+
+        # --- Squares at directions 0°, 60°, 120° from the dodecagon centre ---
+        sq_a_dx =  a / 2.0            # direction  0°: (a/2,  0     ) rot=45°
+        sq_a_dy =  0.0
+        sq_b_dx =  a / 4.0            # direction 60°: (a/4,  a√3/4 ) rot=105°
+        sq_b_dy =  a * sq3 / 4.0
+        sq_c_dx = -a / 4.0            # direction 120°: (−a/4, a√3/4 ) rot=165°
+        sq_c_dy =  a * sq3 / 4.0
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_cols = int((gx1 - gx0) / A1x) + 3
+        n_rows = int((gy1 - gy0) / A2y) + 3
+
+        # A2x > 0: rightward x-drift accumulates as row index increases.
+        # For row = n_rows, the x-baseline has shifted rightward by n_rows·a/2.
+        # In column units (A1x = a) that is n_rows/2.  Extend the column range
+        # leftward so that polygon centres near gx0 at large row values are
+        # still captured.
+        extra_cols = int(math.ceil(n_rows / 2.0)) + 2
+
+        for row in range(-1, n_rows + 1):
+            ly = gy0 + row * A2y
+            for col in range(-1 - extra_cols, n_cols + 1):
+                lx = gx0 + col * A1x + row * A2x
+
+                # Dodecagon at lattice point — rot=15° (first vertex at 15°)
+                if gx0 <= lx <= gx1 and gy0 <= ly <= gy1:
+                    cells.append((lx, ly, 12, 15.0))
+
+                # Hexagon A — direction 30° from dodecagon, rot=0°
+                cx, cy = lx + hex_a_dx, ly + hex_a_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 6, 0.0))
+
+                # Hexagon B — direction 90° from dodecagon, rot=0°
+                cx, cy = lx + hex_b_dx, ly + hex_b_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 6, 0.0))
+
+                # Square A — direction 0° from dodecagon, rot=45°
+                cx, cy = lx + sq_a_dx, ly + sq_a_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 45.0))
+
+                # Square B — direction 60° from dodecagon, rot=105°
+                cx, cy = lx + sq_b_dx, ly + sq_b_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 105.0))
+
+                # Square C — direction 120° from dodecagon, rot=165°
+                cx, cy = lx + sq_c_dx, ly + sq_c_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 165.0))
+
+        return cells
+
+
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
-    "hexagonal":                  HexagonalTilingProvider(),
-    "square":                     SquareTilingProvider(),
-    "triangular":                 TriangularTilingProvider(),
-    "trihexagonal":               TrihexagonalTilingProvider(),
-    "truncated_square":           TruncatedSquareTilingProvider(),
-    "snub_square":                SnubSquareTilingProvider(),
-    "elongated_triangular":       ElongatedTriangularTilingProvider(),
-    "truncated_hexagonal":        TruncatedHexagonalTilingProvider(),
-    "small_rhombitrihexagonal":   SmallRhombitrihexagonalTilingProvider(),
+    "hexagonal":                     HexagonalTilingProvider(),
+    "square":                        SquareTilingProvider(),
+    "triangular":                    TriangularTilingProvider(),
+    "trihexagonal":                  TrihexagonalTilingProvider(),
+    "truncated_square":              TruncatedSquareTilingProvider(),
+    "snub_square":                   SnubSquareTilingProvider(),
+    "elongated_triangular":          ElongatedTriangularTilingProvider(),
+    "truncated_hexagonal":           TruncatedHexagonalTilingProvider(),
+    "small_rhombitrihexagonal":      SmallRhombitrihexagonalTilingProvider(),
+    "great_rhombitrihexagonal":      GreatRhombitrihexagonalTilingProvider(),
 }
 
 
