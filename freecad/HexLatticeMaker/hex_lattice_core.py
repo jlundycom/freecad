@@ -484,24 +484,39 @@ def corner_hole_positions(
     ]
 
 
-def make_leg(leg_width: float, leg_height: float):
-    """Return a FreeCAD Part.Shape for a single shelf leg.
+def make_leg(leg_width: float, leg_height: float, peg_depth: float) -> object:  # Part.Shape
+    """Return a FreeCAD Part.Shape for a single shelf leg with tenon peg.
 
-    The leg is a square-section prism of ``leg_width × leg_width × leg_height``.
-    The top portion (with depth equal to the shelf height) acts as the tenon
-    that plugs into the shelf corner hole; the hole is sized ``leg_width +
-    FIT_CLEARANCE`` so that the leg can be inserted without force.
+    The part is created in **print orientation**: base at z = 0, peg pointing
+    upward.
+
+    Geometry
+    --------
+    ::
+
+        z = leg_height + peg_depth  ── top of peg
+             │  peg  │  ← square tenon, same width as body, enters blind hole
+        z = leg_height  ────────────  ← shoulder rests on shelf underside
+             │  body │  ← main support column
+        z = 0  ─────────────────────  ← print-bed face / bottom of leg
+
+    When positioned in the assembly (via :func:`create_shelf_with_legs`) the
+    leg is translated so that the shoulder sits at z = 0 (shelf bottom face),
+    the body hangs below (z = -leg_height), and the peg protrudes upward into
+    the shelf's blind corner hole (z = 0 … peg_depth).
 
     Parameters
     ----------
-    leg_width  : side length of the square cross-section (mm)
-    leg_height : total height of the leg (mm)
+    leg_width  : side length of the square cross-section for both body and peg (mm)
+    leg_height : height of the support column below the shelf (mm)
+    peg_depth  : height of the tenon peg that enters the shelf blind hole (mm)
     """
     import FreeCAD as App
     import Part
 
+    total_height = leg_height + peg_depth
     return Part.makeBox(
-        leg_width, leg_width, leg_height,
+        leg_width, leg_width, total_height,
         App.Vector(0.0, 0.0, 0.0),
     )
 
@@ -577,10 +592,21 @@ def create_shelf_with_legs(
 ) -> list:
     """Create all interlocking shelf pieces plus four individual corner legs.
 
-    The shelf is identical to :func:`create_all_pieces` except that a square
-    through-hole is cut at each corner of the panel so that the printed legs
-    can plug in and provide vertical support.  Four leg parts (one per corner)
-    are appended to the returned list as separate printable shapes.
+    The shelf panel has a **blind corner socket** at each corner: a square
+    hole that goes ``peg_depth = height × 0.6`` deep from the bottom face,
+    leaving solid material above so the hole is enclosed on all sides.  Each
+    leg is a square prism whose top ``peg_depth`` portion is a tenon that
+    plugs into the socket; the leg body hangs below the shelf.
+
+    Assembly layout (Z axis, shelf at z = 0 … height)::
+
+        z = height          ────────── shelf top face
+                            │ shelf │
+        z = peg_depth       ────╔══╗── top of blind socket (enclosed, supported)
+                            │   ║  ║  ← blind hole receives the peg
+        z = 0               ────╚══╝── shelf bottom face / leg shoulder
+                                │  │  ← peg (top of leg, inside shelf)
+        z = -leg_height     ────┴──┘── bottom of leg
 
     Parameters
     ----------
@@ -590,16 +616,18 @@ def create_shelf_with_legs(
     wall_thickness        : minimum wall between hex cells (mm).
                             Defaults to ``max(1.2, hex_size * 0.15)``.
     max_piece_size        : maximum printable piece size (mm)
-    leg_height            : total height of each leg (mm)
-    leg_width             : side length of the square leg cross-section (mm).
-                            Must be less than ``perim_width`` so that the hole
+    leg_height            : height of the support column below the shelf (mm)
+    leg_width             : side length of the square leg / peg cross-section (mm).
+                            Must be less than ``perim_width`` so that the socket
                             fits entirely within the solid perimeter band.
 
     Returns
     -------
     list of (name: str, shape: Part.Shape)
-        Shelf pieces are named ``Piece_X_Y``; legs are named ``Leg_0`` …
-        ``Leg_3`` (bottom-left, bottom-right, top-left, top-right).
+        Shelf pieces are named ``Piece_X_Y``; legs are named
+        ``Leg_0_BottomLeft``, ``Leg_1_BottomRight``, ``Leg_2_TopLeft``,
+        ``Leg_3_TopRight``.  Each leg is positioned at its assembly location
+        (body below the shelf, peg inside the blind socket).
     """
     _require_freecad()
     import FreeCAD as App
@@ -608,30 +636,35 @@ def create_shelf_with_legs(
     if wall_thickness is None:
         wall_thickness = max(1.2, hex_size * 0.15)
 
+    # Depth of the blind socket (tenon engagement depth).
+    # 60 % of shelf height gives a strong grip while leaving 40 % solid above.
+    peg_depth = height * 0.6
+
     x_cuts   = compute_cuts(width,  max_piece_size)
     y_cuts   = compute_cuts(length, max_piece_size)
     x_bounds = [0.0] + x_cuts + [width]
     y_bounds = [0.0] + y_cuts + [length]
 
     # ------------------------------------------------------------------
-    # Corner hole cutters
-    # The hole is slightly larger than the leg to allow assembly.
+    # Blind corner sockets
+    # The socket is slightly larger than the peg to allow assembly.
     # ------------------------------------------------------------------
     hole_size   = leg_width + FIT_CLEARANCE
     hole_half   = hole_size * 0.5
     corner_ctrs = corner_hole_positions(width, length, perim_width)
 
+    # Each cutter removes material from z=0 up to z=peg_depth (blind hole)
     hole_cutters = []
     for cx, cy in corner_ctrs:
         hole_cutters.append(
             Part.makeBox(
-                hole_size, hole_size, height,
+                hole_size, hole_size, peg_depth,
                 App.Vector(cx - hole_half, cy - hole_half, 0.0),
             )
         )
 
     # ------------------------------------------------------------------
-    # Build shelf pieces (same as create_all_pieces, then cut corner holes)
+    # Build shelf pieces and cut blind sockets where they overlap
     # ------------------------------------------------------------------
     results = []
     for ix, (x0, x1) in enumerate(zip(x_bounds[:-1], x_bounds[1:])):
@@ -645,7 +678,7 @@ def create_shelf_with_legs(
                 x_cuts, y_cuts,
             )
 
-            # Cut corner holes that intersect this piece
+            # Cut blind sockets that intersect this piece
             for cutter, (cx, cy) in zip(hole_cutters, corner_ctrs):
                 h_x0 = cx - hole_half
                 h_x1 = cx + hole_half
@@ -657,10 +690,20 @@ def create_shelf_with_legs(
             results.append((f"Piece_{ix}_{iy}", shape))
 
     # ------------------------------------------------------------------
-    # Build legs (one per corner, plain square prisms for printing)
+    # Build legs at their assembly positions
+    #
+    # Leg in print orientation (origin at base): body from z=0 to z=leg_height,
+    # peg from z=leg_height to z=leg_height+peg_depth.
+    # Assembly translation: shift down by leg_height so the shoulder (where
+    # body meets peg) aligns with z=0 (shelf bottom face) and the peg protrudes
+    # upward into the blind socket at z=0…peg_depth.
     # ------------------------------------------------------------------
     corner_labels = ["BottomLeft", "BottomRight", "TopLeft", "TopRight"]
-    for i, label in enumerate(corner_labels):
-        results.append((f"Leg_{i}_{label}", make_leg(leg_width, leg_height)))
+    for i, (label, (cx, cy)) in enumerate(zip(corner_labels, corner_ctrs)):
+        leg_shape = Part.makeBox(
+            leg_width, leg_width, leg_height + peg_depth,
+            App.Vector(cx - leg_width * 0.5, cy - leg_width * 0.5, -leg_height),
+        )
+        results.append((f"Leg_{i}_{label}", leg_shape))
 
     return results

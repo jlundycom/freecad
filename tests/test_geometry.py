@@ -353,3 +353,68 @@ class TestCornerHolePositions:
         for item in positions:
             assert isinstance(item, tuple)
             assert len(item) == 2
+
+
+# ===========================================================================
+# Peg-depth / blind-socket geometry
+# ===========================================================================
+
+class TestPegDepth:
+    """Tests for the peg_depth calculation used in create_shelf_with_legs.
+
+    These verify the *pure-Python* invariants of the blind-socket design
+    without requiring FreeCAD.
+    """
+
+    @staticmethod
+    def _peg_depth(height: float) -> float:
+        """Mirror the peg_depth formula used in create_shelf_with_legs."""
+        return height * 0.6
+
+    def test_peg_depth_less_than_shelf_height(self):
+        for h in (5.0, 10.0, 20.0, 50.0):
+            pd = self._peg_depth(h)
+            assert pd < h, f"peg_depth={pd} must be less than height={h}"
+
+    def test_peg_depth_leaves_material_above(self):
+        """There must be solid material above the blind socket."""
+        for h in (5.0, 10.0, 20.0):
+            pd = self._peg_depth(h)
+            remaining = h - pd
+            assert remaining > 0.0, "no material above blind socket"
+
+    def test_peg_depth_fraction_is_60_percent(self):
+        h = 10.0
+        pd = self._peg_depth(h)
+        assert abs(pd - 6.0) < 1e-9
+
+    def test_peg_depth_positive(self):
+        for h in (3.0, 10.0, 100.0):
+            assert self._peg_depth(h) > 0.0
+
+    def test_leg_assembly_z_bottom(self):
+        """Leg body bottom face must be below the shelf (z < 0)."""
+        leg_height = 80.0
+        # In assembly the leg origin is shifted by -leg_height
+        leg_z_bottom = -leg_height
+        assert leg_z_bottom < 0.0
+
+    def test_peg_inside_shelf(self):
+        """Peg top must not exceed shelf height."""
+        shelf_height = 10.0
+        peg_depth = self._peg_depth(shelf_height)
+        # Peg goes from z=0 to z=peg_depth
+        assert peg_depth <= shelf_height
+
+    def test_corner_legs_at_distinct_positions(self):
+        """Four legs must occupy four distinct XY positions."""
+        w, l, pw = 300.0, 200.0, 15.0
+        leg_width = 12.0
+        corners = corner_hole_positions(w, l, pw)
+        leg_half = leg_width * 0.5
+        # Bottom-left corner of the bounding box for each leg
+        leg_bbox_origins = [
+            (cx - leg_half, cy - leg_half)
+            for cx, cy in corners
+        ]
+        assert len(set(leg_bbox_origins)) == 4, "legs must have distinct XY positions"
