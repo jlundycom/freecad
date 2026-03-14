@@ -85,9 +85,10 @@ TAPER_RATIO      = 0.20    # finger-joint draft: top depth = tab_d*(1+ratio),
 #: Only the three regular-polygon tilings are implemented in Phase 1.
 #: See TILING_PLAN.md for the plan to add the remaining 8 semi-regular tilings.
 LATTICE_TYPES = {
-    "hexagonal":  "Hexagonal (6.6.6)",
-    "square":     "Square (4.4.4.4)",
-    "triangular": "Triangular (3.3.3.3.3.3)",
+    "hexagonal":    "Hexagonal (6.6.6)",
+    "square":       "Square (4.4.4.4)",
+    "triangular":   "Triangular (3.3.3.3.3.3)",
+    "trihexagonal": "Trihexagonal (3.6.3.6)",
 }
 
 
@@ -291,11 +292,88 @@ class TriangularTilingProvider(TilingProvider):
         return cells
 
 
+class TrihexagonalTilingProvider(TilingProvider):
+    """Semi-regular trihexagonal tiling — Schläfli vertex figure 3.6.3.6.
+
+    Alternating equilateral triangles and regular hexagons, all sharing the
+    same edge length.  Each hexagon is surrounded by 6 triangles; each
+    triangle is surrounded by 3 hexagons.
+
+    The hexagon centres lie on a triangular lattice with vectors::
+
+        a1 = (2·step, 0)
+        a2 = (step,   step·√3)
+
+    where ``step = cell_size + wall_t``.  Each unit cell (one lattice point)
+    holds three polygons:
+
+    * Hexagon (flat-top)  : offset ``(0,       0          )``  n=6, rot=0°
+    * Down-pointing △    : offset ``(step,    step/√3    )``  n=3, rot=270°
+    * Up-pointing   △    : offset ``(2·step,  2·step/√3  )``  n=3, rot=90°
+
+    The column range for each row is extended by ``extra_cols`` to compensate
+    for the oblique X-drift introduced by the ``a2`` vector, ensuring uniform
+    coverage at all Y positions.
+    """
+
+    display_name = "Trihexagonal (3.6.3.6)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Largest polygon is the hexagon; circumradius of hexagon = side length.
+        return cell_size
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+        a1x  = 2.0 * step          # first lattice vector  (2·step, 0)
+        a2x  = step                # second lattice vector (step, step·√3)
+        a2y  = step * math.sqrt(3)
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_rows = int((gy1 - gy0) / a2y) + 3
+        n_cols = int((gx1 - gx0) / a1x) + 3
+
+        # Each row shifts x by a2x = step = a1x/2.  Over n_rows rows the
+        # accumulated x-drift is n_rows·step.  In column units (a1x = 2·step
+        # per column) that is n_rows/2.  Pre-compute and add to col_start so
+        # the left boundary is always covered regardless of row index.
+        extra_cols = int(math.ceil(n_rows / 2.0)) + 2
+
+        inv_sqrt3 = 1.0 / math.sqrt(3)  # precompute for speed
+
+        for row in range(-1, n_rows + 1):
+            ly = gy0 + row * a2y
+            for col in range(-1 - extra_cols, n_cols + 1):
+                lx = gx0 + col * a1x + row * a2x
+
+                # Hexagon (flat-top): first vertex at 0° from +X
+                cx, cy = lx, ly
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 6, 0.0))
+
+                # Down-pointing triangle (▽): apex at bottom, rotation = 270°
+                cx = lx + step
+                cy = ly + step * inv_sqrt3
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 270.0))
+
+                # Up-pointing triangle (▲): apex at top, rotation = 90°
+                cx = lx + 2.0 * step
+                cy = ly + 2.0 * step * inv_sqrt3
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 90.0))
+
+        return cells
+
+
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
-    "hexagonal":  HexagonalTilingProvider(),
-    "square":     SquareTilingProvider(),
-    "triangular": TriangularTilingProvider(),
+    "hexagonal":    HexagonalTilingProvider(),
+    "square":       SquareTilingProvider(),
+    "triangular":   TriangularTilingProvider(),
+    "trihexagonal": TrihexagonalTilingProvider(),
 }
 
 

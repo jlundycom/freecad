@@ -71,13 +71,14 @@ due to the oblique coordinate system.
 
 ---
 
-## Implemented Tilings (Phase 1)
+## Implemented Tilings (Phase 1 + Phase 2 start)
 
 | Key | Display Name | Schläfli | Cell types |
 |-----|-------------|----------|-----------|
 | `hexagonal` | Hexagonal (6.6.6) | `{6}` | Regular hexagon |
 | `square` | Square (4.4.4.4) | `{4}` | Regular square |
 | `triangular` | Triangular (3.3.3.3.3.3) | `{3}` | Equilateral triangle (up + down) |
+| `trihexagonal` | Trihexagonal (3.6.3.6) | `r{6}` | Equilateral triangle + regular hexagon |
 
 ---
 
@@ -89,15 +90,11 @@ given as multiples of `step = cell_size + wall_t`.
 
 ---
 
-### Trihexagonal (3.6.3.6)  — symbol `r{6}`
+### ~~Trihexagonal (3.6.3.6)~~ — **DONE** (key `trihexagonal`)
 
-Alternating triangles and hexagons.
-
-* **Lattice**: triangular, `a1 = (step, 0)`, `a2 = (step/2, step*√3/2)`
-* **Basis** (2 cells per unit cell):
-  * Triangle: offset `(step/3, 0)`, n=3, rot=90°
-  * Hexagon: offset `(2*step/3, 0)`, n=6, rot=0°
-* **Circumradius**: use hexagon circumradius = `cell_size`
+Implemented in `TrihexagonalTilingProvider`.  Lattice `a1 = (2·step, 0)`,
+`a2 = (step, step·√3)`.  Basis: hexagon at `(0, 0)`, down-triangle at
+`(step, step/√3)`, up-triangle at `(2·step, 2·step/√3)`.
 
 ---
 

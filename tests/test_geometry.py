@@ -34,6 +34,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     HexagonalTilingProvider,
     SquareTilingProvider,
     TriangularTilingProvider,
+    TrihexagonalTilingProvider,
 )
 
 import pytest
@@ -804,11 +805,11 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_three_entries(self):
-        assert len(LATTICE_TYPES) == 3
+    def test_lattice_types_has_four_entries(self):
+        assert len(LATTICE_TYPES) == 4
 
     def test_required_keys_present(self):
-        for key in ("hexagonal", "square", "triangular"):
+        for key in ("hexagonal", "square", "triangular", "trihexagonal"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
 
     def test_all_display_names_are_strings(self):
@@ -816,9 +817,10 @@ class TestLatticeTypes:
             assert isinstance(name, str) and name, f"Bad display name for {key!r}"
 
     def test_get_tiling_provider_returns_correct_types(self):
-        assert isinstance(get_tiling_provider("hexagonal"),  HexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("square"),     SquareTilingProvider)
-        assert isinstance(get_tiling_provider("triangular"), TriangularTilingProvider)
+        assert isinstance(get_tiling_provider("hexagonal"),    HexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("square"),       SquareTilingProvider)
+        assert isinstance(get_tiling_provider("triangular"),   TriangularTilingProvider)
+        assert isinstance(get_tiling_provider("trihexagonal"), TrihexagonalTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
         with pytest.raises(ValueError):
@@ -858,6 +860,9 @@ class TestTilingCells:
     def test_triangular_non_empty(self):
         assert len(self._cells("triangular")) > 0
 
+    def test_trihexagonal_non_empty(self):
+        assert len(self._cells("trihexagonal")) > 0
+
     def test_each_cell_is_4_tuple(self):
         for key in LATTICE_TYPES:
             for cell in self._cells(key):
@@ -874,6 +879,36 @@ class TestTilingCells:
     def test_n_sides_correct_for_triangular(self):
         for cx, cy, n, rot in self._cells("triangular"):
             assert n == 3
+
+    def test_n_sides_correct_for_trihexagonal(self):
+        """Trihexagonal cells must be either hexagons (n=6) or triangles (n=3)."""
+        for cx, cy, n, rot in self._cells("trihexagonal"):
+            assert n in (3, 6), f"Unexpected n_sides={n} in trihexagonal tiling"
+
+    def test_trihexagonal_has_both_hexagons_and_triangles(self):
+        """Trihexagonal tiling must contain both n=6 and n=3 cells."""
+        sides = {n for _cx, _cy, n, _rot in self._cells("trihexagonal")}
+        assert 6 in sides, "Missing hexagons (n=6) in trihexagonal tiling"
+        assert 3 in sides, "Missing triangles (n=3) in trihexagonal tiling"
+
+    def test_trihexagonal_triangle_to_hexagon_ratio(self):
+        """Trihexagonal tiling has exactly 2 triangles per hexagon."""
+        cells = self._cells("trihexagonal")
+        n_hex = sum(1 for _cx, _cy, n, _rot in cells if n == 6)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_hex > 0, "No hexagons in trihexagonal tiling"
+        # Boundary cropping can shave a few cells from the finite test region,
+        # so a 15% tolerance is used.  Any structural bug (e.g. missing an
+        # entire triangle type) would produce a ratio far from 2.0.
+        assert abs(n_tri / n_hex - 2.0) < 0.15, (
+            f"Expected tri/hex ratio ≈ 2.0, got {n_tri/n_hex:.3f}"
+        )
+
+    def test_trihexagonal_has_two_triangle_rotations(self):
+        """Trihexagonal must have both up (90°) and down (270°) triangles."""
+        tri_rots = {rot for _cx, _cy, n, rot in self._cells("trihexagonal") if n == 3}
+        assert 90.0  in tri_rots, "Missing up-pointing triangles (rotation=90°)"
+        assert 270.0 in tri_rots, "Missing down-pointing triangles (rotation=270°)"
 
     def test_triangular_has_two_rotations(self):
         """Triangular tiling must have both up (90°) and down (270°) triangles."""
@@ -901,6 +936,12 @@ class TestTilingCells:
             assert r["gx0"] <= cx <= r["gx1"]
             assert r["gy0"] <= cy <= r["gy1"]
 
+    def test_all_centres_within_region_trihexagonal(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("trihexagonal"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
     # ── no duplicate centres ──────────────────────────────────────────────
 
     def test_no_duplicate_centres_hexagonal(self):
@@ -917,6 +958,11 @@ class TestTilingCells:
         pts = [(round(cx, 6), round(cy, 6))
                for cx, cy, _n, _rot in self._cells("triangular")]
         assert len(pts) == len(set(pts)), "Duplicate cell centres in triangular tiling"
+
+    def test_no_duplicate_centres_trihexagonal(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("trihexagonal")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in trihexagonal tiling"
 
     # ── empty region returns empty list ───────────────────────────────────
 
@@ -982,6 +1028,62 @@ class TestTilingCells:
         for s in (5.0, 8.0, 12.0):
             expected = s / math.sqrt(3)
             assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_trihexagonal_circumradius_equals_cell_size(self):
+        """Trihexagonal circumradius is the hexagon circumradius = cell_size."""
+        p = get_tiling_provider("trihexagonal")
+        for s in (5.0, 8.0, 12.0):
+            assert abs(p.cell_circumradius(s) - s) < 1e-9
+
+    # ── trihexagonal adjacency distance ───────────────────────────────────
+
+    def test_trihexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0, the nearest-neighbour distance in the trihexagonal
+        tiling (hex-centre to triangle-centre) is 2·cell_size/√3."""
+        cell_size = 9.0
+        expected  = 2.0 * cell_size / math.sqrt(3)
+        p  = get_tiling_provider("trihexagonal")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Trihexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    # ── trihexagonal uniform coverage (oblique-drift guard) ───────────────
+
+    def test_trihexagonal_coverage_uniform_across_y(self):
+        """Trihexagonal tiling must have the same cell density at all Y positions.
+
+        Uses a tall region to expose any oblique-drift accumulation that would
+        leave the top strips under-populated (analogous to the bug fixed in
+        the triangular tiling).
+        """
+        p    = get_tiling_provider("trihexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        strip_height = step * math.sqrt(3)  # a2y
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strips"
+        assert high_cells > 0, "No cells in top strips"
+        # The region holds ~17 cells per strip-pair; allow ±3 for boundary
+        # cropping.  Any oblique drift would produce differences >> 10.
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible oblique drift in trihexagonal tiling."
+        )
 
     # ── triangular tiling uniform coverage (regression for oblique-drift bug) ─
 
