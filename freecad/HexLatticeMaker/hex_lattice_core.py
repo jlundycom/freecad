@@ -84,13 +84,14 @@ TAPER_RATIO      = 0.20    # finger-joint draft: top depth = tab_d*(1+ratio),
 #: Ordered mapping of tiling key → display name for the UI dropdown.
 #: See TILING_PLAN.md for the plan to add the remaining semi-regular tilings.
 LATTICE_TYPES = {
-    "hexagonal":             "Hexagonal (6.6.6)",
-    "square":                "Square (4.4.4.4)",
-    "triangular":            "Triangular (3.3.3.3.3.3)",
-    "trihexagonal":          "Trihexagonal (3.6.3.6)",
-    "truncated_square":      "Truncated Square (4.8.8)",
-    "snub_square":           "Snub Square (3.3.4.3.4)",
-    "elongated_triangular":  "Elongated Triangular (3.3.3.4.4)",
+    "hexagonal":              "Hexagonal (6.6.6)",
+    "square":                 "Square (4.4.4.4)",
+    "triangular":             "Triangular (3.3.3.3.3.3)",
+    "trihexagonal":           "Trihexagonal (3.6.3.6)",
+    "truncated_square":       "Truncated Square (4.8.8)",
+    "snub_square":            "Snub Square (3.3.4.3.4)",
+    "elongated_triangular":   "Elongated Triangular (3.3.3.4.4)",
+    "truncated_hexagonal":    "Truncated Hexagonal (3.12.12)",
 }
 
 
@@ -673,6 +674,105 @@ class ElongatedTriangularTilingProvider(TilingProvider):
         return cells
 
 
+class TruncatedHexagonalTilingProvider(TilingProvider):
+    """Semi-regular truncated hexagonal tiling — Schläfli vertex figure 3.12.12.
+
+    Equilateral triangles and regular 12-gons (dodecagons), all sharing the
+    same edge length.  At every vertex one triangle and two dodecagons meet
+    (interior angles 60° + 150° + 150° = 360°).  Each triangle is surrounded
+    by three dodecagons; each dodecagon borders six triangles and six other
+    dodecagons alternately.
+
+    The tiling can be seen as the truncation of the regular hexagonal tiling:
+    every vertex of the hexagonal tiling is replaced by a small equilateral
+    triangle, expanding each hexagon into a regular 12-gon.
+
+    The 12-gon centres form a triangular Bravais lattice with period::
+
+        a = step · (2 + √3)   where step = cell_size + wall_t
+
+    and lattice vectors::
+
+        a1 = (a,    0         )
+        a2 = (a/2,  a · √3/2  )
+
+    Each unit cell (one lattice point) holds three polygons:
+
+    * Dodecagon (flat-top, rot=15°) : offset ``(0,       0         )``
+    * Down-△ (apex down, rot=30°)   : offset ``(a/2,     a · √3/6  )``
+    * Up-△   (apex up,   rot=90°)   : offset ``(a,       a · √3/3  )``
+
+    Every triangle vertex lies exactly on a vertex of a neighbouring
+    dodecagon (verified analytically).
+
+    The positive ``a2x = a/2`` introduces a rightward x-drift of ``a/2``
+    per row.  For large row indices (high Y) the lattice points move to the
+    right, so cells at the *left* edge of the region need extra negative
+    column indices to be covered.  The column range is extended leftward by::
+
+        extra_cols = ⌈n_rows / 2⌉ + 2
+
+    (identical to the trihexagonal provider which has the same 0.5
+    column-unit drift per row).
+    """
+
+    display_name = "Truncated Hexagonal (3.12.12)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Largest polygon is the dodecagon.  Circumradius of a regular 12-gon
+        # with side s: R = s / (2 · sin(π/12))
+        return cell_size / (2.0 * math.sin(math.pi / 12.0))
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        a    = step * (2.0 + sq3)   # lattice period = step · (2+√3)
+
+        # Primitive lattice vectors
+        a1x = a
+        a2x = a / 2.0
+        a2y = a * sq3 / 2.0
+
+        # Basis offsets from the lattice point (lx, ly)
+        dn_dx = a / 2.0            # down-pointing triangle (apex down, rot=30°)
+        dn_dy = a * sq3 / 6.0
+        up_dx = a                  # up-pointing triangle   (apex up,   rot=90°)
+        up_dy = a * sq3 / 3.0
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_rows = int((gy1 - gy0) / a2y) + 3
+        n_cols = int((gx1 - gx0) / a1x) + 3
+
+        # a2x = a/2 > 0: rightward x-drift per row.  For high row indices the
+        # lattice points shift right, so more negative column values are needed
+        # to cover the left edge of the region.  Extend column range leftward.
+        extra_cols = int(math.ceil(n_rows / 2.0)) + 2
+
+        for row in range(-1, n_rows + 1):
+            ly = gy0 + row * a2y
+            for col in range(-1 - extra_cols, n_cols + 1):
+                lx = gx0 + col * a1x + row * a2x
+
+                # Dodecagon (flat-top) — first vertex at 15° from +X
+                if gx0 <= lx <= gx1 and gy0 <= ly <= gy1:
+                    cells.append((lx, ly, 12, 15.0))
+
+                # Down-pointing triangle (▽) — apex down, rot=30°
+                cx, cy = lx + dn_dx, ly + dn_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 30.0))
+
+                # Up-pointing triangle (▲) — apex up, rot=90°
+                cx, cy = lx + up_dx, ly + up_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 90.0))
+
+        return cells
+
+
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
     "hexagonal":             HexagonalTilingProvider(),
@@ -682,6 +782,7 @@ _TILING_PROVIDERS = {
     "truncated_square":      TruncatedSquareTilingProvider(),
     "snub_square":           SnubSquareTilingProvider(),
     "elongated_triangular":  ElongatedTriangularTilingProvider(),
+    "truncated_hexagonal":   TruncatedHexagonalTilingProvider(),
 }
 
 

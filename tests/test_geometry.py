@@ -38,6 +38,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     TruncatedSquareTilingProvider,
     SnubSquareTilingProvider,
     ElongatedTriangularTilingProvider,
+    TruncatedHexagonalTilingProvider,
 )
 
 import pytest
@@ -808,12 +809,13 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_seven_entries(self):
-        assert len(LATTICE_TYPES) == 7
+    def test_lattice_types_has_eight_entries(self):
+        assert len(LATTICE_TYPES) == 8
 
     def test_required_keys_present(self):
         for key in ("hexagonal", "square", "triangular", "trihexagonal",
-                    "truncated_square", "snub_square", "elongated_triangular"):
+                    "truncated_square", "snub_square", "elongated_triangular",
+                    "truncated_hexagonal"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
 
     def test_all_display_names_are_strings(self):
@@ -828,6 +830,7 @@ class TestLatticeTypes:
         assert isinstance(get_tiling_provider("truncated_square"),      TruncatedSquareTilingProvider)
         assert isinstance(get_tiling_provider("snub_square"),           SnubSquareTilingProvider)
         assert isinstance(get_tiling_provider("elongated_triangular"),  ElongatedTriangularTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_hexagonal"),   TruncatedHexagonalTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
         with pytest.raises(ValueError):
@@ -1396,4 +1399,108 @@ class TestTilingCells:
         assert abs(low_cells - high_cells) <= 3, (
             f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
             "Possible oblique drift in elongated_triangular tiling."
+        )
+
+    # ── truncated hexagonal tiling (3.12.12) ─────────────────────────────
+
+    def test_truncated_hexagonal_non_empty(self):
+        assert len(self._cells("truncated_hexagonal")) > 0
+
+    def test_n_sides_correct_for_truncated_hexagonal(self):
+        """Truncated-hexagonal cells must be dodecagons (n=12) or triangles (n=3)."""
+        for cx, cy, n, rot in self._cells("truncated_hexagonal"):
+            assert n in (3, 12), f"Unexpected n_sides={n} in truncated_hexagonal tiling"
+
+    def test_truncated_hexagonal_has_both_dodecagons_and_triangles(self):
+        sides = {n for _cx, _cy, n, _rot in self._cells("truncated_hexagonal")}
+        assert 12 in sides, "Missing dodecagons (n=12) in truncated_hexagonal tiling"
+        assert 3  in sides, "Missing triangles (n=3) in truncated_hexagonal tiling"
+
+    def test_truncated_hexagonal_triangle_to_dodecagon_ratio(self):
+        """Truncated-hexagonal tiling has exactly 2 triangles per dodecagon."""
+        cells  = self._cells("truncated_hexagonal")
+        n_12   = sum(1 for _cx, _cy, n, _rot in cells if n == 12)
+        n_tri  = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_12 > 0, "No dodecagons in truncated_hexagonal tiling"
+        # Allow ±20% tolerance for boundary cropping.
+        assert abs(n_tri / n_12 - 2.0) < 0.20, (
+            f"Expected tri/dodec ratio ≈ 2.0, got {n_tri/n_12:.3f}"
+        )
+
+    def test_truncated_hexagonal_dodecagon_rotation(self):
+        """Truncated-hexagonal dodecagons must be at rot=15° (flat-top)."""
+        dodec_rots = {rot for _cx, _cy, n, rot in self._cells("truncated_hexagonal") if n == 12}
+        assert 15.0 in dodec_rots, "Missing flat-top dodecagons (rot=15°) in truncated_hexagonal"
+
+    def test_truncated_hexagonal_triangle_rotations(self):
+        """Truncated-hexagonal must contain triangles at rot=30° (apex-down) and rot=90° (apex-up)."""
+        tri_rots = {rot for _cx, _cy, n, rot in self._cells("truncated_hexagonal") if n == 3}
+        assert 30.0 in tri_rots, "Missing apex-down triangles (rot=30°) in truncated_hexagonal"
+        assert 90.0 in tri_rots, "Missing apex-up triangles (rot=90°) in truncated_hexagonal"
+
+    def test_all_centres_within_region_truncated_hexagonal(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("truncated_hexagonal"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    def test_no_duplicate_centres_truncated_hexagonal(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("truncated_hexagonal")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in truncated_hexagonal tiling"
+
+    def test_truncated_hexagonal_circumradius(self):
+        """Truncated-hexagonal circumradius is the 12-gon circumradius = cell_size/(2·sin(π/12))."""
+        p = get_tiling_provider("truncated_hexagonal")
+        for s in (5.0, 8.0, 12.0):
+            expected = s / (2.0 * math.sin(math.pi / 12.0))
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_truncated_hexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the nearest centre-to-centre distance equals
+        cell_size·(3+2√3)/3, the dodecagon-centre to adjacent triangle-centre
+        distance (= a/√3 where a = cell_size·(2+√3))."""
+        cell_size = 9.0
+        sq3 = math.sqrt(3)
+        expected  = cell_size * (3.0 + 2.0 * sq3) / 3.0
+        p  = get_tiling_provider("truncated_hexagonal")
+        cs = p.get_cells(0.0, 200.0, 0.0, 200.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Truncated-hexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_truncated_hexagonal_coverage_uniform_across_y(self):
+        """Truncated-hexagonal tiling must cover the region uniformly at all Y positions.
+
+        The oblique a2 vector (a2x = a/2 > 0) introduces a rightward x-drift
+        per row.  Without extra_cols compensation, cells at the left edge of
+        tall regions would be missed.
+        """
+        p    = get_tiling_provider("truncated_hexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        a    = step * (2.0 + sq3)
+        strip_height = a * sq3 / 2.0   # a2y
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strips of truncated_hexagonal tiling"
+        assert high_cells > 0, "No cells in top strips of truncated_hexagonal tiling"
+        # Allow ±3 cells difference for boundary cropping.
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible oblique drift in truncated_hexagonal tiling."
         )

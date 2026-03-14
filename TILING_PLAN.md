@@ -82,6 +82,7 @@ due to the oblique coordinate system.
 | `truncated_square` | Truncated Square (4.8.8) | `t{4}` | Regular square + regular octagon |
 | `snub_square` | Snub Square (3.3.4.3.4) | `s{4}` | Regular square + equilateral triangle |
 | `elongated_triangular` | Elongated Triangular (3.3.3.4.4) | — | Regular square + equilateral triangle |
+| `truncated_hexagonal` | Truncated Hexagonal (3.12.12) | `t{6}` | Equilateral triangle + regular 12-gon |
 
 ---
 
@@ -133,13 +134,17 @@ up-triangle at `(step/2, step·(6+√3)/6)` rot=90°, down-triangle at
 
 ---
 
-### Truncated Hexagonal (3.12.12)  — symbol `t{6}`
+### ~~Truncated Hexagonal (3.12.12)~~ — **DONE** (key `truncated_hexagonal`)
 
-Triangles surrounded by dodecagons (12-gons).
-
-* **Lattice**: triangular.
-* **Basis**: 1 triangle + 2 dodecagons per unit cell.
-* **Circumradius**: use dodecagon circumradius = `cell_size / (2 sin(π/12))`
+Implemented in `TruncatedHexagonalTilingProvider`.  Equilateral triangles and
+regular 12-gons (dodecagons) sharing the same edge length.  Triangular Bravais
+lattice with period `a = step·(2+√3)` and vectors `a1 = (a, 0)`,
+`a2 = (a/2, a√3/2)`.  Basis: dodecagon at `(0,0)` rot=15°, down-triangle at
+`(a/2, a√3/6)` rot=30°, up-triangle at `(a, a√3/3)` rot=90°.  Column range
+extended leftward by `extra_cols = ⌈n_rows/2⌉ + 2` to compensate for rightward
+`a2x`-drift (identical formula to the trihexagonal provider).  Every triangle
+vertex lies exactly on a vertex of a neighbouring dodecagon (verified
+analytically).
 
 ---
 
