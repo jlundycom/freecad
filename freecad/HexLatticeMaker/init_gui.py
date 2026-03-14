@@ -131,13 +131,14 @@ def _build_shelf_with_legs(params: dict):
 
     pieces = create_shelf_with_legs(**params)
 
-    for name, shape in pieces:
+    for name, shape, placement in pieces:
         obj = doc.addObject("Part::Feature", name)
         obj.Shape = shape
+        obj.Placement = App.Placement(placement, App.Rotation())
 
     doc.recompute()
     Gui.SendMsgToActiveView("ViewFit")
-    leg_count   = sum(1 for n, _ in pieces if n.startswith("Leg_"))
+    leg_count   = sum(1 for n, _s, _p in pieces if n.startswith("Leg_"))
     shelf_count = len(pieces) - leg_count
     App.Console.PrintMessage(
         f"[HexLatticeMaker] Done – {shelf_count} shelf piece(s) + "

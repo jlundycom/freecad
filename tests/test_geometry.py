@@ -23,6 +23,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     hex_centers,
     is_excluded,
     corner_hole_positions,
+    leg_flush_placements,
     MAX_PIECE_SIZE,
     FIT_CLEARANCE,
     MIN_SEG_RATIO,
@@ -408,13 +409,88 @@ class TestPegDepth:
 
     def test_corner_legs_at_distinct_positions(self):
         """Four legs must occupy four distinct XY positions."""
-        w, l, pw = 300.0, 200.0, 15.0
-        leg_width = 12.0
-        corners = corner_hole_positions(w, l, pw)
-        leg_half = leg_width * 0.5
-        # Bottom-left corner of the bounding box for each leg
-        leg_bbox_origins = [
-            (cx - leg_half, cy - leg_half)
-            for cx, cy in corners
-        ]
-        assert len(set(leg_bbox_origins)) == 4, "legs must have distinct XY positions"
+        w, l = 300.0, 200.0
+        leg_width, leg_height = 12.0, 80.0
+        placements = leg_flush_placements(w, l, leg_height, leg_width)
+        leg_origins_xy = [(px, py) for px, py, _pz in placements]
+        assert len(set(leg_origins_xy)) == 4, "legs must have distinct XY positions"
+
+
+# ===========================================================================
+# leg_flush_placements
+# ===========================================================================
+
+class TestLegFlushPlacements:
+    """Tests for the flush-corner leg placement helper.
+
+    All tests are pure Python (no FreeCAD required).
+    """
+
+    def test_returns_four_placements(self):
+        placements = leg_flush_placements(300.0, 200.0, 80.0, 12.0)
+        assert len(placements) == 4
+
+    def test_each_placement_is_three_tuple(self):
+        for item in leg_flush_placements(300.0, 200.0, 80.0, 12.0):
+            assert len(item) == 3, "each placement must be (px, py, pz)"
+
+    def test_bottom_left_outer_corner_at_shelf_origin(self):
+        """BL leg must start at (0, 0) — flush with the shelf corner."""
+        placements = leg_flush_placements(300.0, 200.0, 80.0, 12.0)
+        px, py, _ = placements[0]
+        assert abs(px) < 1e-9, f"BL leg px={px} should be 0"
+        assert abs(py) < 1e-9, f"BL leg py={py} should be 0"
+
+    def test_bottom_right_outer_corner_at_shelf_right_edge(self):
+        """BR leg outer face (px + leg_width) must be flush with shelf right edge."""
+        w, leg_width = 300.0, 12.0
+        placements = leg_flush_placements(w, 200.0, 80.0, leg_width)
+        px, py, _ = placements[1]
+        assert abs(px + leg_width - w) < 1e-9, "BR outer face not flush with right edge"
+        assert abs(py) < 1e-9, "BR py should be 0"
+
+    def test_top_left_outer_corner_at_shelf_top_edge(self):
+        """TL leg outer face (py + leg_width) must be flush with shelf top edge."""
+        l, leg_width = 200.0, 12.0
+        placements = leg_flush_placements(300.0, l, 80.0, leg_width)
+        px, py, _ = placements[2]
+        assert abs(px) < 1e-9, "TL px should be 0"
+        assert abs(py + leg_width - l) < 1e-9, "TL outer face not flush with top edge"
+
+    def test_top_right_outer_corners_at_shelf_edges(self):
+        """TR leg outer faces must be flush with both the right and top edges."""
+        w, l, leg_width = 300.0, 200.0, 12.0
+        placements = leg_flush_placements(w, l, 80.0, leg_width)
+        px, py, _ = placements[3]
+        assert abs(px + leg_width - w) < 1e-9, "TR outer face not flush with right edge"
+        assert abs(py + leg_width - l) < 1e-9, "TR outer face not flush with top edge"
+
+    def test_all_pz_equal_minus_leg_height(self):
+        """All four legs must have pz = -leg_height (shoulder at shelf bottom)."""
+        leg_height = 80.0
+        for px, py, pz in leg_flush_placements(300.0, 200.0, leg_height, 12.0):
+            assert abs(pz + leg_height) < 1e-9, f"pz={pz} should be -{leg_height}"
+
+    def test_no_leg_protrudes_beyond_shelf_x(self):
+        """Leg X extent must stay within [0, width]."""
+        w, leg_width = 300.0, 12.0
+        for px, py, _ in leg_flush_placements(w, 200.0, 80.0, leg_width):
+            assert px >= 0.0 - 1e-9
+            assert px + leg_width <= w + 1e-9
+
+    def test_no_leg_protrudes_beyond_shelf_y(self):
+        """Leg Y extent must stay within [0, length]."""
+        l, leg_width = 200.0, 12.0
+        for px, py, _ in leg_flush_placements(300.0, l, 80.0, leg_width):
+            assert py >= 0.0 - 1e-9
+            assert py + leg_width <= l + 1e-9
+
+    def test_hole_centre_equals_peg_centre(self):
+        """Hole centre (cx, cy) must equal leg placement + leg_width / 2."""
+        w, l, lw, lh = 300.0, 200.0, 12.0, 80.0
+        placements = leg_flush_placements(w, l, lh, lw)
+        expected_ctrs = [(px + lw * 0.5, py + lw * 0.5) for px, py, _ in placements]
+        # Verify bottom-left and top-right are diagonally symmetric
+        (cx0, cy0), (cx3, cy3) = expected_ctrs[0], expected_ctrs[3]
+        assert abs((cx0 + cx3) - w) < 1e-9
+        assert abs((cy0 + cy3) - l) < 1e-9

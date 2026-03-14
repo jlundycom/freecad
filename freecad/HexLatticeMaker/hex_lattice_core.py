@@ -484,6 +484,45 @@ def corner_hole_positions(
     ]
 
 
+def leg_flush_placements(
+    width: float,
+    length: float,
+    leg_height: float,
+    leg_width: float,
+) -> list:
+    """Return the assembly placement ``(px, py, pz)`` for each corner leg.
+
+    Legs are positioned **flush** with the shelf outer edge: the outer corner
+    of each leg aligns exactly with the nearest shelf corner so that no part
+    of the leg protrudes beyond the shelf footprint.
+
+    The leg geometry is a box built at the local origin
+    ``(0, 0, 0) … (leg_width, leg_width, leg_height + peg_depth)``.
+    Applying the returned placement vector as a FreeCAD ``Placement`` maps
+    that local geometry to the correct world position:
+
+    * body column   → z = ``-leg_height … 0``   (below the shelf bottom face)
+    * tenon peg     → z = ``0 … peg_depth``       (inside the blind socket)
+
+    Parameters
+    ----------
+    width, length : shelf panel dimensions (mm)
+    leg_height    : height of the support column below the shelf (mm)
+    leg_width     : side length of the square leg cross-section (mm)
+
+    Returns
+    -------
+    list of four ``(px, py, pz)`` tuples in order:
+        [bottom-left, bottom-right, top-left, top-right]
+    """
+    return [
+        (0.0,               0.0,                -leg_height),  # bottom-left
+        (width - leg_width, 0.0,                -leg_height),  # bottom-right
+        (0.0,               length - leg_width, -leg_height),  # top-left
+        (width - leg_width, length - leg_width, -leg_height),  # top-right
+    ]
+
+
 def make_leg(leg_width: float, leg_height: float, peg_depth: float) -> object:  # Part.Shape
     """Return a FreeCAD Part.Shape for a single shelf leg with tenon peg.
 
@@ -623,11 +662,13 @@ def create_shelf_with_legs(
 
     Returns
     -------
-    list of (name: str, shape: Part.Shape)
-        Shelf pieces are named ``Piece_X_Y``; legs are named
-        ``Leg_0_BottomLeft``, ``Leg_1_BottomRight``, ``Leg_2_TopLeft``,
-        ``Leg_3_TopRight``.  Each leg is positioned at its assembly location
-        (body below the shelf, peg inside the blind socket).
+    list of (name: str, shape: Part.Shape, placement: App.Vector)
+        Shelf pieces are named ``Piece_X_Y`` with identity placement;
+        legs are named ``Leg_0_BottomLeft`` … ``Leg_3_TopRight`` with a
+        placement vector that positions each leg flush with the nearest shelf
+        corner (body below the shelf, peg inside the blind socket).
+        Callers should apply ``obj.Placement = App.Placement(placement,
+        App.Rotation())`` when adding objects to the document.
     """
     _require_freecad()
     import FreeCAD as App
@@ -646,12 +687,18 @@ def create_shelf_with_legs(
     y_bounds = [0.0] + y_cuts + [length]
 
     # ------------------------------------------------------------------
-    # Blind corner sockets
-    # The socket is slightly larger than the peg to allow assembly.
+    # Flush leg placements and derived hole centres.
+    # Each leg's outer corner aligns with the nearest shelf corner; the
+    # blind socket centre is the peg centre = leg BL + leg_width / 2.
     # ------------------------------------------------------------------
-    hole_size   = leg_width + FIT_CLEARANCE
-    hole_half   = hole_size * 0.5
-    corner_ctrs = corner_hole_positions(width, length, perim_width)
+    placements  = leg_flush_placements(width, length, leg_height, leg_width)
+    corner_ctrs = [
+        (px + leg_width * 0.5, py + leg_width * 0.5)
+        for px, py, _pz in placements
+    ]
+
+    hole_size = leg_width + FIT_CLEARANCE
+    hole_half = hole_size * 0.5
 
     # Each cutter removes material from z=0 up to z=peg_depth (blind hole)
     hole_cutters = []
@@ -664,7 +711,8 @@ def create_shelf_with_legs(
         )
 
     # ------------------------------------------------------------------
-    # Build shelf pieces and cut blind sockets where they overlap
+    # Build shelf pieces and cut blind sockets where they overlap.
+    # Shelf pieces carry an identity placement (origin unchanged).
     # ------------------------------------------------------------------
     results = []
     for ix, (x0, x1) in enumerate(zip(x_bounds[:-1], x_bounds[1:])):
@@ -687,23 +735,25 @@ def create_shelf_with_legs(
                 if h_x1 > x0 and h_x0 < x1 and h_y1 > y0 and h_y0 < y1:
                     shape = shape.cut(cutter)
 
-            results.append((f"Piece_{ix}_{iy}", shape))
+            results.append((f"Piece_{ix}_{iy}", shape, App.Vector(0.0, 0.0, 0.0)))
 
     # ------------------------------------------------------------------
-    # Build legs at their assembly positions
+    # Build legs at the local origin; placement applied by the caller.
     #
-    # Leg in print orientation (origin at base): body from z=0 to z=leg_height,
-    # peg from z=leg_height to z=leg_height+peg_depth.
-    # Assembly translation: shift down by leg_height so the shoulder (where
-    # body meets peg) aligns with z=0 (shelf bottom face) and the peg protrudes
-    # upward into the blind socket at z=0…peg_depth.
+    # Leg geometry (print orientation, base at z = 0):
+    #   body column  z = 0 … leg_height
+    #   tenon peg    z = leg_height … leg_height + peg_depth
+    #
+    # Placement vector shifts z = 0 of the leg to z = -leg_height in world
+    # space (shoulder sits at shelf bottom face), so the peg protrudes into
+    # the blind socket at z = 0 … peg_depth.
     # ------------------------------------------------------------------
     corner_labels = ["BottomLeft", "BottomRight", "TopLeft", "TopRight"]
-    for i, (label, (cx, cy)) in enumerate(zip(corner_labels, corner_ctrs)):
-        leg_shape = Part.makeBox(
-            leg_width, leg_width, leg_height + peg_depth,
-            App.Vector(cx - leg_width * 0.5, cy - leg_width * 0.5, -leg_height),
-        )
-        results.append((f"Leg_{i}_{label}", leg_shape))
+    for i, (label, (px, py, pz)) in enumerate(zip(corner_labels, placements)):
+        results.append((
+            f"Leg_{i}_{label}",
+            make_leg(leg_width, leg_height, peg_depth),
+            App.Vector(px, py, pz),
+        ))
 
     return results
