@@ -1650,3 +1650,109 @@ class TestTilingCells:
             f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
             "Possible y-drift in small_rhombitrihexagonal tiling."
         )
+
+
+# ===========================================================================
+# Full-region tiling: cells reach the perimeter zone
+# ===========================================================================
+
+class TestFullRegionTiling:
+    """Verify that tiling providers generate cells in the perimeter zone when
+    called with full shelf bounds (the behaviour expected by the new make_piece
+    exclusion-zone fuse-back approach).
+
+    Previously make_piece passed interior bounds (perim_w … total-perim_w) to
+    get_cells(), so cells in the perimeter band were never generated.  With the
+    redesign, make_piece passes (0 … total_w, 0 … total_l) and fuses solid
+    exclusion-zone blocks back after cutting holes, giving cleanly truncated
+    polygons at zone boundaries.
+    """
+
+    # Representative shelf and tiling parameters.
+    _W      = 200.0
+    _L      = 150.0
+    _PERIM  = 10.0
+    _CELL   = 8.0
+    _WALL   = 1.5
+
+    @pytest.mark.parametrize("key", list(LATTICE_TYPES.keys()))
+    def test_cells_generated_inside_perimeter_zone(self, key):
+        """get_cells() with full bounds must return at least one cell whose
+        centre falls within the perimeter band (within perim_w of an edge).
+        """
+        p = get_tiling_provider(key)
+        cells = p.get_cells(0.0, self._W, 0.0, self._L, self._CELL, self._WALL)
+        perim = self._PERIM
+        W, L  = self._W, self._L
+
+        perimeter_cells = [
+            (cx, cy) for cx, cy, _n, _rot in cells
+            if (cx < perim or cx > W - perim or cy < perim or cy > L - perim)
+        ]
+        assert len(perimeter_cells) > 0, (
+            f"No cells in perimeter zone for tiling {key!r} with full bounds. "
+            "make_piece now needs cells there for the fuse-back approach."
+        )
+
+    @pytest.mark.parametrize("key", list(LATTICE_TYPES.keys()))
+    def test_full_region_produces_more_cells_than_interior(self, key):
+        """Full-bounds get_cells() must return strictly more cells than the
+        interior-only call (because the perimeter zone is now included).
+        """
+        p = get_tiling_provider(key)
+        perim = self._PERIM
+        W, L  = self._W, self._L
+
+        cells_full     = p.get_cells(0.0, W, 0.0, L, self._CELL, self._WALL)
+        cells_interior = p.get_cells(perim, W - perim, perim, L - perim,
+                                     self._CELL, self._WALL)
+
+        assert len(cells_full) > len(cells_interior), (
+            f"Full-region call returned no extra cells vs interior for {key!r}. "
+            "Perimeter-zone cells are required for the exclusion fuse-back."
+        )
+
+    @pytest.mark.parametrize("key", list(LATTICE_TYPES.keys()))
+    def test_no_duplicates_full_region(self, key):
+        """Full-bounds get_cells() must still produce no duplicate centres."""
+        p = get_tiling_provider(key)
+        cells = p.get_cells(0.0, self._W, 0.0, self._L, self._CELL, self._WALL)
+        pts   = [(round(cx, 6), round(cy, 6)) for cx, cy, _n, _rot in cells]
+        assert len(pts) == len(set(pts)), (
+            f"Duplicate cell centres when using full bounds for {key!r}"
+        )
+
+    @pytest.mark.parametrize("key", list(LATTICE_TYPES.keys()))
+    def test_all_centres_within_full_region_bounds(self, key):
+        """All cell centres must lie within [0, W] × [0, L]."""
+        p = get_tiling_provider(key)
+        cells = p.get_cells(0.0, self._W, 0.0, self._L, self._CELL, self._WALL)
+        for cx, cy, _n, _rot in cells:
+            assert 0.0 <= cx <= self._W, f"cx={cx} out of [0, {self._W}]"
+            assert 0.0 <= cy <= self._L, f"cy={cy} out of [0, {self._L}]"
+
+
+class TestIsExcludedLegacy:
+    """is_excluded() is kept for backward-compatibility.  Its tests are
+    separate from the new full-region approach to make it clear the function
+    is a standalone utility, no longer called by make_piece().
+    """
+
+    def test_is_excluded_still_suppresses_perimeter_cells(self):
+        """is_excluded() must still return True for cells in the perimeter band."""
+        # Cell 5 mm from the left edge, perim_w=10 → inside the perimeter band
+        assert is_excluded(
+            cx=5.0, cy=50.0,
+            hex_size=8.0, perim_w=10.0,
+            total_w=200.0, total_l=100.0,
+            x_cuts=[], y_cuts=[],
+        ), "Cell at cx=5 (inside 10 mm perimeter) should be excluded"
+
+    def test_is_excluded_false_for_interior_cell(self):
+        """is_excluded() must return False for a safely interior cell."""
+        assert not is_excluded(
+            cx=100.0, cy=50.0,
+            hex_size=8.0, perim_w=10.0,
+            total_w=200.0, total_l=100.0,
+            x_cuts=[], y_cuts=[],
+        ), "Cell at cx=100 (centre of a 200-wide shelf) should not be excluded"

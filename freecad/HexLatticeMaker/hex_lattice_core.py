@@ -75,6 +75,7 @@ MIN_SEG_RATIO    = 0.25    # minimum fraction of tab_w for an end-segment to be 
 PIN_RADIUS_RATIO = 0.25    # round through-pin radius = leg_width × PIN_RADIUS_RATIO
 TAPER_RATIO      = 0.20    # finger-joint draft: top depth = tab_d*(1+ratio),
                            #                     bottom depth = tab_d*(1-ratio)
+_GEOM_EPS        = 1e-9    # geometry epsilon: threshold for discarding near-zero extents
 
 
 # ---------------------------------------------------------------------------
@@ -994,6 +995,14 @@ def is_excluded(
 ) -> bool:
     """Return True if a cell hole centered at (cx, cy) should be suppressed.
 
+    .. note::
+        This function is retained as a public utility for callers that need
+        an explicit exclusion test.  The :func:`make_piece` geometry builder
+        no longer uses it: instead, holes are cut across the **full** shelf
+        region and solid exclusion-zone blocks are fused back via
+        :func:`_build_exclusion_solids`, which produces cleanly truncated
+        polygon holes at zone boundaries rather than omitting cells entirely.
+
     Suppressed zones
     ~~~~~~~~~~~~~~~~
     * Outer perimeter bands (within ``perim_w`` of any edge).
@@ -1339,6 +1348,75 @@ def finger_joint(
 # Single-piece builder
 # ---------------------------------------------------------------------------
 
+def _build_exclusion_solids(
+    piece_x0: float, piece_x1: float,
+    piece_y0: float, piece_y1: float,
+    height: float,
+    total_w: float, total_l: float,
+    perim_w: float,
+    x_cuts: list,
+    y_cuts: list,
+    leg_zones: list,
+) -> list:
+    """Return a list of FreeCAD ``Part.Shape`` boxes for all exclusion zones
+    that overlap the piece region ``[piece_x0, piece_x1] × [piece_y0, piece_y1]``.
+
+    Exclusion zones are areas that must remain **solid** in the finished piece:
+
+    * **Perimeter frame** — four strips of width *perim_w* along every outer
+      edge of the shelf (bottom, top, left, right).
+    * **Cut bridges** — a band of half-width *perim_w / 2* on each side of
+      every X-cut and Y-cut line, keeping the finger-joint bridge material
+      intact.
+    * **Leg support rectangles** — the full footprint of each leg corner
+      supplied via *leg_zones*.
+
+    Each zone box is clipped to the piece bounds before being added, so only
+    the portion that overlaps this piece is included.  The caller fuses these
+    boxes back into the piece body (after cutting the full tiling holes) to
+    produce cleanly truncated polygon holes at zone boundaries instead of
+    entirely suppressing cells whose centres fall inside a zone.
+    """
+    import FreeCAD as App
+    import Part
+
+    solids = []
+
+    def _clip_and_add(zx0, zx1, zy0, zy1):
+        """Clip a zone rect to the piece bounds and append a box if non-empty."""
+        cx0 = max(zx0, piece_x0)
+        cx1 = min(zx1, piece_x1)
+        cy0 = max(zy0, piece_y0)
+        cy1 = min(zy1, piece_y1)
+        if cx1 > cx0 + _GEOM_EPS and cy1 > cy0 + _GEOM_EPS:
+            solids.append(
+                Part.makeBox(cx1 - cx0, cy1 - cy0, height,
+                             App.Vector(cx0, cy0, 0.0))
+            )
+
+    # ── Perimeter frame (4 outer strips) ─────────────────────────────────
+    pw = perim_w
+    bottom_strip = (0.0,          total_w, 0.0,          pw)
+    top_strip    = (0.0,          total_w, total_l - pw, total_l)
+    left_strip   = (0.0,          pw,      0.0,          total_l)
+    right_strip  = (total_w - pw, total_w, 0.0,          total_l)
+    for strip in (bottom_strip, top_strip, left_strip, right_strip):
+        _clip_and_add(*strip)
+
+    # ── Bridge bands at cut lines ─────────────────────────────────────────
+    bridge_half = perim_w * 0.5
+    for xc in x_cuts:
+        _clip_and_add(xc - bridge_half, xc + bridge_half, 0.0, total_l)
+    for yc in y_cuts:
+        _clip_and_add(0.0, total_w, yc - bridge_half, yc + bridge_half)
+
+    # ── Leg support rectangles ────────────────────────────────────────────
+    for lx0, ly0, lx1, ly1 in leg_zones:
+        _clip_and_add(lx0, lx1, ly0, ly1)
+
+    return solids
+
+
 def make_piece(
     ix: int, iy: int,
     x0: float, x1: float,
@@ -1355,13 +1433,26 @@ def make_piece(
 ) -> object:  # returns Part.Shape
     """Build one interlocking piece of the lattice panel.
 
+    Tiling approach
+    ~~~~~~~~~~~~~~~
+    The tiling is generated for the **full shelf region** ``[0, total_w] ×
+    [0, total_l]``, including areas that must remain solid (perimeter band,
+    cut bridges, leg zones).  All polygon holes are cut into the base body
+    first so that the tiling is perfectly regular across the entire surface.
+
+    Exclusion zones (perimeter frame, cut bridges, leg rectangles) are then
+    **fused back** as solid geometry on top of the tiled body.  Any polygon
+    hole that overlaps an exclusion zone is cleanly *truncated* at the zone
+    boundary rather than being omitted entirely.  This produces a more
+    uniform, regular appearance at the edges and around leg corners.
+
     Parameters
     ----------
     ix, iy       : piece grid indices (used for naming; not needed for geometry)
     x0 … y1      : nominal piece bounds (at cut lines)
     total_w/l    : full-part dimensions
     height       : part thickness (Z)
-    perim_w      : solid perimeter width
+    perim_w      : solid perimeter width and finger-joint bridge thickness
     hex_size     : cell side length (mm).  Named ``hex_size`` for backward
                    compatibility; for non-hexagonal tilings this is the side
                    length of the cell polygon.
@@ -1369,8 +1460,8 @@ def make_piece(
     x_cuts       : list of X-cut positions
     y_cuts       : list of Y-cut positions
     leg_zones    : list of ``(x0, y0, x1, y1)`` rectangles that must remain
-                   solid (e.g. leg-corner footprints).  Cells whose bounding
-                   circle overlaps any zone are suppressed.
+                   solid (e.g. leg-corner footprints).  The full footprint is
+                   restored after hole cutting via a boolean fuse.
     lattice_type : one of the keys in :data:`LATTICE_TYPES`
                    (default ``"hexagonal"``).
     """
@@ -1387,53 +1478,67 @@ def make_piece(
                         App.Vector(x0, y0, 0.0))
 
     # ------------------------------------------------------------------
-    # 2. Lattice holes
+    # 2. Lattice holes — tiled across the full shelf region
     # ------------------------------------------------------------------
-    # Interior bounds of the entire part (global perimeter exclusion zone)
-    gx0 = perim_w
-    gx1 = total_w - perim_w
-    gy0 = perim_w
-    gy1 = total_l - perim_w
+    # Generate cells for the entire shelf (0 … total_w × 0 … total_l) so
+    # that the grid is consistent and includes the perimeter/bridge zones.
+    # Cells in exclusion zones are NOT skipped here; they will be restored
+    # by the boolean fuse in step 3.
 
-    if gx1 > gx0 and gy1 > gy0:
-        provider = get_tiling_provider(lattice_type)
-        cells    = provider.get_cells(gx0, gx1, gy0, gy1, hex_size, wall_t)
-        cell_r   = provider.cell_circumradius(hex_size)
-        cell_holes = []
+    provider = get_tiling_provider(lattice_type)
+    cells    = provider.get_cells(0.0, total_w, 0.0, total_l, hex_size, wall_t)
+    cell_r   = provider.cell_circumradius(hex_size)
+    cell_holes = []
 
-        # Clip box is constant for the whole piece – create it once.
-        clip_box = Part.makeBox(x1 - x0, y1 - y0, height,
-                                App.Vector(x0, y0, 0.0))
+    # Clip box is constant for the whole piece – create it once.
+    clip_box = Part.makeBox(x1 - x0, y1 - y0, height,
+                            App.Vector(x0, y0, 0.0))
 
-        for cx, cy, n_sides, rotation_deg in cells:
-            if is_excluded(cx, cy, hex_size, perim_w,
-                           total_w, total_l, x_cuts, y_cuts,
-                           leg_zones, cell_r=cell_r):
-                continue
-            # Cell must overlap this piece's region
-            if (cx + cell_r < x0 or cx - cell_r > x1 or
-                    cy + cell_r < y0 or cy - cell_r > y1):
-                continue
+    for cx, cy, n_sides, rotation_deg in cells:
+        # Cell must overlap this piece's region
+        if (cx + cell_r < x0 or cx - cell_r > x1 or
+                cy + cell_r < y0 or cy - cell_r > y1):
+            continue
 
-            prism = make_polygon_prism(cx, cy, n_sides, rotation_deg,
-                                       hex_size, height)
+        prism = make_polygon_prism(cx, cy, n_sides, rotation_deg,
+                                   hex_size, height)
 
-            # Only run the (expensive) common() clip for cells that actually
-            # straddle a piece boundary.  Interior cells are added as-is.
-            if (cx - cell_r < x0 + 1e-6 or cx + cell_r > x1 - 1e-6 or
-                    cy - cell_r < y0 + 1e-6 or cy + cell_r > y1 - 1e-6):
-                clipped = prism.common(clip_box)
-                if clipped.Volume > 1e-9:
-                    cell_holes.append(clipped)
-            else:
-                cell_holes.append(prism)
+        # Only run the (expensive) common() clip for cells that actually
+        # straddle a piece boundary.  Interior cells are added as-is.
+        if (cx - cell_r < x0 + 1e-6 or cx + cell_r > x1 - 1e-6 or
+                cy - cell_r < y0 + 1e-6 or cy + cell_r > y1 - 1e-6):
+            clipped = prism.common(clip_box)
+            if clipped.Volume > 1e-9:
+                cell_holes.append(clipped)
+        else:
+            cell_holes.append(prism)
 
-        if cell_holes:
-            holes_union = _fuse_shapes(cell_holes)
-            body = body.cut(holes_union)
+    if cell_holes:
+        holes_union = _fuse_shapes(cell_holes)
+        body = body.cut(holes_union)
 
     # ------------------------------------------------------------------
-    # 3. Finger joints on each cut face
+    # 3. Restore exclusion zones via boolean fuse
+    # ------------------------------------------------------------------
+    # Build solid boxes for all exclusion zones that overlap this piece
+    # (perimeter frame, cut bridges, leg footprints) and fuse them back.
+    # This truncates any polygon holes at zone boundaries, ensuring the
+    # solid perimeter/bridge material is always intact.
+
+    excl_solids = _build_exclusion_solids(
+        x0, x1, y0, y1,
+        height,
+        total_w, total_l,
+        perim_w,
+        x_cuts, y_cuts,
+        leg_zones,
+    )
+    if excl_solids:
+        excl_union = _fuse_shapes(excl_solids)
+        body = body.fuse(excl_union)
+
+    # ------------------------------------------------------------------
+    # 4. Finger joints on each cut face
     # ------------------------------------------------------------------
     # ── Left face (x = x0): this piece is to the RIGHT of that cut
     if x0 > 1e-6:
