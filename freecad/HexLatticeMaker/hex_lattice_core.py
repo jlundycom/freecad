@@ -82,14 +82,14 @@ TAPER_RATIO      = 0.20    # finger-joint draft: top depth = tab_d*(1+ratio),
 # ---------------------------------------------------------------------------
 
 #: Ordered mapping of tiling key → display name for the UI dropdown.
-#: Only the three regular-polygon tilings are implemented in Phase 1.
-#: See TILING_PLAN.md for the plan to add the remaining 8 semi-regular tilings.
+#: See TILING_PLAN.md for the plan to add the remaining semi-regular tilings.
 LATTICE_TYPES = {
     "hexagonal":        "Hexagonal (6.6.6)",
     "square":           "Square (4.4.4.4)",
     "triangular":       "Triangular (3.3.3.3.3.3)",
     "trihexagonal":     "Trihexagonal (3.6.3.6)",
     "truncated_square": "Truncated Square (4.8.8)",
+    "snub_square":      "Snub Square (3.3.4.3.4)",
 }
 
 
@@ -444,6 +444,129 @@ class TruncatedSquareTilingProvider(TilingProvider):
         return cells
 
 
+class SnubSquareTilingProvider(TilingProvider):
+    """Semi-regular snub square tiling — Schläfli vertex figure 3.3.4.3.4.
+
+    The *right-handed* (counter-clockwise) chiral variant.  Every vertex is
+    surrounded by three equilateral triangles and two squares in the cyclic
+    order 3, 3, 4, 3, 4.  All polygons share the same edge length.
+
+    The tiling has wallpaper-group **p4** symmetry (four-fold rotational
+    symmetry, no reflections), making it chiral.
+
+    The layout uses an oblique square Bravais lattice with primitive vectors::
+
+        a1 = step · ( (2+√3)/2,    1/2    )
+        a2 = step · ( −1/2,        (2+√3)/2 )
+
+    where ``step = cell_size + wall_t``.  Both vectors have magnitude
+    ``step · √(2+√3)``.  Each unit cell (one lattice point) holds six
+    polygons:
+
+    * Square S0 : offset ``(0,                  0               )``  n=4, rot=45°
+    * Square S1 : offset ``(step·(1+√3)/4,      step·(3+√3)/4  )``  n=4, rot=75°
+    * Triangle T1: offset ``(step·(3+√3)/6,      0               )``  n=3, rot=0°
+    * Triangle T2: offset ``(step·(3+2√3)/6,     step/2          )``  n=3, rot=60°
+    * Triangle T3: offset ``(0,                  step·(3+√3)/6  )``  n=3, rot=90°
+    * Triangle T4: offset ``(step·(1+√3)/2,      step·(3+√3)/3  )``  n=3, rot=30°
+
+    The basis offsets satisfy ``T1 + T2 = a1`` and ``T3 + T4 = a1 + a2``,
+    confirming four triangles and two squares per primitive cell with total
+    area ``step²·(2+√3)`` as expected.
+
+    The ``a2`` vector has a negative x-component (``−step/2``), introducing
+    a leftward x-drift of ``step/2`` per row.  Over ``n_rows`` rows the
+    accumulated drift is ``n_rows·step/2``.  In column units this is
+    ``n_rows / (2+√3)``, so the column range is extended on the right by
+    ``extra_cols = ⌈n_rows / (2+√3)⌉ + 2`` to ensure full coverage.
+    """
+
+    display_name = "Snub Square (3.3.4.3.4)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Largest polygon is the square; circumradius of square with side s
+        # is s·√2/2.
+        return cell_size * math.sqrt(2) / 2.0
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+
+        # ── oblique primitive lattice vectors ──────────────────────────────
+        a1x =  step * (2.0 + sq3) / 2.0   # ≈ 1.866·step  (rightward + upward)
+        a1y =  step * 0.5
+        a2x = -step * 0.5                  # leftward drift per row
+        a2y =  step * (2.0 + sq3) / 2.0   # ≈ 1.866·step  (upward)
+
+        # ── basis offsets from lattice point ──────────────────────────────
+        # Square S0: axis-aligned (rot=45°)
+        sq0_dx, sq0_dy = 0.0, 0.0
+
+        # Square S1: snub-rotated (rot=75°) at cell centre (a1+a2)/2
+        sq1_dx = step * (1.0 + sq3) / 4.0   # ≈ 0.683·step
+        sq1_dy = step * (3.0 + sq3) / 4.0   # ≈ 1.183·step
+
+        # Triangles — T1+T2 = a1, T3+T4 = a1+a2
+        t1_dx = step * (3.0 + sq3) / 6.0             # ≈ 0.789·step
+        t1_dy = 0.0
+        t2_dx = step * (3.0 + 2.0 * sq3) / 6.0      # ≈ 1.077·step
+        t2_dy = step * 0.5
+        t3_dx = 0.0
+        t3_dy = step * (3.0 + sq3) / 6.0             # ≈ 0.789·step
+        t4_dx = step * (1.0 + sq3) / 2.0             # ≈ 1.366·step
+        t4_dy = step * (3.0 + sq3) / 3.0             # ≈ 1.577·step
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_rows = int((gy1 - gy0) / a2y) + 3
+        n_cols = int((gx1 - gx0) / a1x) + 3
+
+        # a2x < 0: leftward drift accumulates as row increases.  Over n_rows
+        # rows the total drift is n_rows·|a2x| = n_rows·step/2.  In column
+        # units (a1x per column) that is n_rows/(2+√3).  Extend the column
+        # range on the right by extra_cols so no cell is missed.
+        extra_cols = int(math.ceil(n_rows / (2.0 + sq3))) + 2
+
+        for row in range(-1, n_rows + 1):
+            for col in range(-1, n_cols + 1 + extra_cols):
+                lx = gx0 + col * a1x + row * a2x
+                ly = gy0 + col * a1y + row * a2y
+
+                # Square S0 — rot=45°
+                cx, cy = lx + sq0_dx, ly + sq0_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 45.0))
+
+                # Square S1 — rot=75°
+                cx, cy = lx + sq1_dx, ly + sq1_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 75.0))
+
+                # Triangle T1 — rot=0° (apex right)
+                cx, cy = lx + t1_dx, ly + t1_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 0.0))
+
+                # Triangle T2 — rot=60° (apex upper-right)
+                cx, cy = lx + t2_dx, ly + t2_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 60.0))
+
+                # Triangle T3 — rot=90° (apex up)
+                cx, cy = lx + t3_dx, ly + t3_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 90.0))
+
+                # Triangle T4 — rot=30° (apex upper-right)
+                cx, cy = lx + t4_dx, ly + t4_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 30.0))
+
+        return cells
+
+
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
     "hexagonal":        HexagonalTilingProvider(),
@@ -451,6 +574,7 @@ _TILING_PROVIDERS = {
     "triangular":       TriangularTilingProvider(),
     "trihexagonal":     TrihexagonalTilingProvider(),
     "truncated_square": TruncatedSquareTilingProvider(),
+    "snub_square":      SnubSquareTilingProvider(),
 }
 
 
