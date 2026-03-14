@@ -20,6 +20,7 @@ class HexLatticeDialog(QtWidgets.QDialog):
 
         form = QtWidgets.QFormLayout()
         form.setLabelAlignment(QtCore.Qt.AlignRight)
+        self._form = form
 
         def _spin(lo, hi, default, dec=1, suffix=" mm"):
             w = QtWidgets.QDoubleSpinBox()
@@ -77,3 +78,55 @@ class HexLatticeDialog(QtWidgets.QDialog):
             "wall_thickness": self.wall_spin.value(),
             "max_piece_size": self.max_piece_spin.value(),
         }
+
+
+class ShelfWithLegsDialog(HexLatticeDialog):
+    """Modal dialog for shelf-with-legs creation parameters.
+
+    Extends :class:`HexLatticeDialog` with two additional fields:
+
+    * **Leg height** – total printed height of each corner leg.
+    * **Leg width** – side length of the square leg cross-section.
+      Must be smaller than the perimeter width so the corner holes fit
+      entirely within the solid perimeter band.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Shelf with Legs")
+
+        def _spin(lo, hi, default, dec=1, suffix=" mm"):
+            w = QtWidgets.QDoubleSpinBox()
+            w.setRange(lo, hi)
+            w.setValue(default)
+            w.setDecimals(dec)
+            w.setSuffix(suffix)
+            return w
+
+        self.leg_height_spin = _spin(10.0, 2000.0, 100.0)
+        self.leg_width_spin  = _spin( 5.0,   100.0,  20.0)
+
+        self._form.addRow("Leg height:",            self.leg_height_spin)
+        self._form.addRow("Leg width\n(cross-section):", self.leg_width_spin)
+
+        # Update the info label to mention legs
+        info_label = QtWidgets.QLabel(
+            "<i>Parts wider/longer than <b>Max piece size</b> are automatically\n"
+            "sliced into interlocking finger-joint pieces for 3-D printing.\n"
+            "<b>Leg width</b> must be smaller than <b>Perimeter width</b> so\n"
+            "that the corner holes fit within the solid perimeter band.</i>"
+        )
+        info_label.setWordWrap(True)
+        # Replace the existing info label (second widget in the main layout)
+        main_layout = self.layout()
+        old_info = main_layout.itemAt(1).widget()
+        main_layout.replaceWidget(old_info, info_label)
+        old_info.deleteLater()
+
+    # ------------------------------------------------------------------
+    def get_params(self) -> dict:
+        """Return dialog values including leg dimensions."""
+        params = super().get_params()
+        params["leg_height"] = self.leg_height_spin.value()
+        params["leg_width"]  = self.leg_width_spin.value()
+        return params

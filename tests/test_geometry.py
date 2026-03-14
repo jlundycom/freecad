@@ -22,6 +22,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     compute_cuts,
     hex_centers,
     is_excluded,
+    corner_hole_positions,
     MAX_PIECE_SIZE,
     FIT_CLEARANCE,
     MIN_SEG_RATIO,
@@ -274,3 +275,81 @@ class TestPieceBoundaries:
         for total in (100.0, 200.0, 220.0):
             cuts = compute_cuts(total)
             assert cuts == [], f"Expected no cuts for total={total}"
+
+
+# ===========================================================================
+# corner_hole_positions
+# ===========================================================================
+
+class TestCornerHolePositions:
+    """Tests for the corner leg-hole centre-position helper."""
+
+    def test_returns_four_positions(self):
+        positions = corner_hole_positions(200.0, 150.0, 10.0)
+        assert len(positions) == 4
+
+    def test_all_positions_within_bounds(self):
+        w, l, pw = 200.0, 150.0, 10.0
+        for cx, cy in corner_hole_positions(w, l, pw):
+            assert 0.0 < cx < w, f"cx={cx} out of (0, {w})"
+            assert 0.0 < cy < l, f"cy={cy} out of (0, {l})"
+
+    def test_positions_at_expected_locations(self):
+        w, l, pw = 200.0, 150.0, 10.0
+        offset = pw / 2.0
+        expected = [
+            (offset,       offset),
+            (w - offset,   offset),
+            (offset,       l - offset),
+            (w - offset,   l - offset),
+        ]
+        positions = corner_hole_positions(w, l, pw)
+        for pos, exp in zip(positions, expected):
+            assert abs(pos[0] - exp[0]) < 1e-9, f"x: {pos[0]} ≠ {exp[0]}"
+            assert abs(pos[1] - exp[1]) < 1e-9, f"y: {pos[1]} ≠ {exp[1]}"
+
+    def test_bottom_left_is_nearest_to_origin(self):
+        positions = corner_hole_positions(300.0, 200.0, 8.0)
+        bl_cx, bl_cy = positions[0]
+        dist_bl = math.sqrt(bl_cx ** 2 + bl_cy ** 2)
+        for cx, cy in positions[1:]:
+            assert dist_bl <= math.sqrt(cx ** 2 + cy ** 2) + 1e-6
+
+    def test_symmetric_for_square_shelf(self):
+        """On a square shelf the four hole centres should be symmetric."""
+        side = 200.0
+        pw   = 12.0
+        positions = corner_hole_positions(side, side, pw)
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = positions
+        # bottom-left and top-right should sum to (side, side)
+        assert abs((x0 + x3) - side) < 1e-9
+        assert abs((y0 + y3) - side) < 1e-9
+        # bottom-right and top-left should sum to (side, side)
+        assert abs((x1 + x2) - side) < 1e-9
+        assert abs((y1 + y2) - side) < 1e-9
+
+    def test_holes_fit_within_perimeter_band(self):
+        """The hole bounding box must lie entirely within the solid perimeter band."""
+        w, l, pw = 300.0, 250.0, 15.0
+        leg_width = 12.0
+        hole_half = (leg_width + FIT_CLEARANCE) / 2.0
+        corner_ctrs = corner_hole_positions(w, l, pw)
+        # Expected corner-band intervals along each axis:
+        #   bottom-left / top-left  : x band [0, pw]
+        #   bottom-right / top-right: x band [w - pw, w]
+        #   bottom-left / bottom-right: y band [0, pw]
+        #   top-left / top-right      : y band [l - pw, l]
+        x_bands = [(0.0, pw), (w - pw, w), (0.0, pw), (w - pw, w)]
+        y_bands = [(0.0, pw), (0.0, pw), (l - pw, l), (l - pw, l)]
+        for (cx, cy), (xlo, xhi), (ylo, yhi) in zip(corner_ctrs, x_bands, y_bands):
+            assert cx - hole_half >= xlo, "hole left edge outside perimeter band"
+            assert cx + hole_half <= xhi, "hole right edge outside perimeter band"
+            assert cy - hole_half >= ylo, "hole bottom edge outside perimeter band"
+            assert cy + hole_half <= yhi, "hole top edge outside perimeter band"
+
+    def test_returns_list_of_tuples(self):
+        positions = corner_hole_positions(100.0, 80.0, 6.0)
+        assert isinstance(positions, list)
+        for item in positions:
+            assert isinstance(item, tuple)
+            assert len(item) == 2

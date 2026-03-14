@@ -452,7 +452,62 @@ def make_piece(
 
 
 # ---------------------------------------------------------------------------
-# Top-level entry point
+# Corner-hole / leg geometry helpers
+# ---------------------------------------------------------------------------
+
+def corner_hole_positions(
+    width: float,
+    length: float,
+    perim_w: float,
+) -> list:
+    """Return the (cx, cy) centres of the four corner leg-hole positions.
+
+    Each hole is centred at ``perim_w / 2`` inward from the nearest corner so
+    that it falls entirely within the solid perimeter band.
+
+    Parameters
+    ----------
+    width, length : overall shelf dimensions (mm)
+    perim_w       : solid perimeter / bridge width (mm)
+
+    Returns
+    -------
+    list of four (cx, cy) tuples in order:
+        [bottom-left, bottom-right, top-left, top-right]
+    """
+    offset = perim_w * 0.5
+    return [
+        (offset,           offset),            # bottom-left
+        (width - offset,   offset),            # bottom-right
+        (offset,           length - offset),   # top-left
+        (width - offset,   length - offset),   # top-right
+    ]
+
+
+def make_leg(leg_width: float, leg_height: float):
+    """Return a FreeCAD Part.Shape for a single shelf leg.
+
+    The leg is a square-section prism of ``leg_width × leg_width × leg_height``.
+    The top portion (with depth equal to the shelf height) acts as the tenon
+    that plugs into the shelf corner hole; the hole is sized ``leg_width +
+    FIT_CLEARANCE`` so that the leg can be inserted without force.
+
+    Parameters
+    ----------
+    leg_width  : side length of the square cross-section (mm)
+    leg_height : total height of the leg (mm)
+    """
+    import FreeCAD as App
+    import Part
+
+    return Part.makeBox(
+        leg_width, leg_width, leg_height,
+        App.Vector(0.0, 0.0, 0.0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Top-level entry points
 # ---------------------------------------------------------------------------
 
 def create_all_pieces(
@@ -507,3 +562,105 @@ def create_all_pieces(
             pieces.append((f"Piece_{ix}_{iy}", shape))
 
     return pieces
+
+
+def create_shelf_with_legs(
+    width: float,
+    length: float,
+    height: float,
+    perim_width: float,
+    hex_size: float,
+    wall_thickness: float = None,
+    max_piece_size: float = MAX_PIECE_SIZE,
+    leg_height: float = 100.0,
+    leg_width: float = 20.0,
+) -> list:
+    """Create all interlocking shelf pieces plus four individual corner legs.
+
+    The shelf is identical to :func:`create_all_pieces` except that a square
+    through-hole is cut at each corner of the panel so that the printed legs
+    can plug in and provide vertical support.  Four leg parts (one per corner)
+    are appended to the returned list as separate printable shapes.
+
+    Parameters
+    ----------
+    width, length, height : overall shelf panel dimensions (mm)
+    perim_width           : solid border / finger-joint bridge thickness (mm)
+    hex_size              : hexagon cell side length (mm)
+    wall_thickness        : minimum wall between hex cells (mm).
+                            Defaults to ``max(1.2, hex_size * 0.15)``.
+    max_piece_size        : maximum printable piece size (mm)
+    leg_height            : total height of each leg (mm)
+    leg_width             : side length of the square leg cross-section (mm).
+                            Must be less than ``perim_width`` so that the hole
+                            fits entirely within the solid perimeter band.
+
+    Returns
+    -------
+    list of (name: str, shape: Part.Shape)
+        Shelf pieces are named ``Piece_X_Y``; legs are named ``Leg_0`` …
+        ``Leg_3`` (bottom-left, bottom-right, top-left, top-right).
+    """
+    _require_freecad()
+    import FreeCAD as App
+    import Part
+
+    if wall_thickness is None:
+        wall_thickness = max(1.2, hex_size * 0.15)
+
+    x_cuts   = compute_cuts(width,  max_piece_size)
+    y_cuts   = compute_cuts(length, max_piece_size)
+    x_bounds = [0.0] + x_cuts + [width]
+    y_bounds = [0.0] + y_cuts + [length]
+
+    # ------------------------------------------------------------------
+    # Corner hole cutters
+    # The hole is slightly larger than the leg to allow assembly.
+    # ------------------------------------------------------------------
+    hole_size   = leg_width + FIT_CLEARANCE
+    hole_half   = hole_size * 0.5
+    corner_ctrs = corner_hole_positions(width, length, perim_width)
+
+    hole_cutters = []
+    for cx, cy in corner_ctrs:
+        hole_cutters.append(
+            Part.makeBox(
+                hole_size, hole_size, height,
+                App.Vector(cx - hole_half, cy - hole_half, 0.0),
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Build shelf pieces (same as create_all_pieces, then cut corner holes)
+    # ------------------------------------------------------------------
+    results = []
+    for ix, (x0, x1) in enumerate(zip(x_bounds[:-1], x_bounds[1:])):
+        for iy, (y0, y1) in enumerate(zip(y_bounds[:-1], y_bounds[1:])):
+            shape = make_piece(
+                ix, iy,
+                x0, x1, y0, y1,
+                width, length,
+                height, perim_width, hex_size,
+                wall_thickness,
+                x_cuts, y_cuts,
+            )
+
+            # Cut corner holes that intersect this piece
+            for cutter, (cx, cy) in zip(hole_cutters, corner_ctrs):
+                h_x0 = cx - hole_half
+                h_x1 = cx + hole_half
+                h_y0 = cy - hole_half
+                h_y1 = cy + hole_half
+                if h_x1 > x0 and h_x0 < x1 and h_y1 > y0 and h_y0 < y1:
+                    shape = shape.cut(cutter)
+
+            results.append((f"Piece_{ix}_{iy}", shape))
+
+    # ------------------------------------------------------------------
+    # Build legs (one per corner, plain square prisms for printing)
+    # ------------------------------------------------------------------
+    corner_labels = ["BottomLeft", "BottomRight", "TopLeft", "TopRight"]
+    for i, label in enumerate(corner_labels):
+        results.append((f"Leg_{i}_{label}", make_leg(leg_width, leg_height)))
+
+    return results
