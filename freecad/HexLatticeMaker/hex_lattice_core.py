@@ -84,12 +84,13 @@ TAPER_RATIO      = 0.20    # finger-joint draft: top depth = tab_d*(1+ratio),
 #: Ordered mapping of tiling key → display name for the UI dropdown.
 #: See TILING_PLAN.md for the plan to add the remaining semi-regular tilings.
 LATTICE_TYPES = {
-    "hexagonal":        "Hexagonal (6.6.6)",
-    "square":           "Square (4.4.4.4)",
-    "triangular":       "Triangular (3.3.3.3.3.3)",
-    "trihexagonal":     "Trihexagonal (3.6.3.6)",
-    "truncated_square": "Truncated Square (4.8.8)",
-    "snub_square":      "Snub Square (3.3.4.3.4)",
+    "hexagonal":             "Hexagonal (6.6.6)",
+    "square":                "Square (4.4.4.4)",
+    "triangular":            "Triangular (3.3.3.3.3.3)",
+    "trihexagonal":          "Trihexagonal (3.6.3.6)",
+    "truncated_square":      "Truncated Square (4.8.8)",
+    "snub_square":           "Snub Square (3.3.4.3.4)",
+    "elongated_triangular":  "Elongated Triangular (3.3.3.4.4)",
 }
 
 
@@ -581,14 +582,106 @@ class SnubSquareTilingProvider(TilingProvider):
         return cells
 
 
+class ElongatedTriangularTilingProvider(TilingProvider):
+    """Semi-regular elongated triangular tiling — Schläfli vertex figure 3.3.3.4.4.
+
+    Alternating strips of squares and equilateral triangles, all sharing the
+    same edge length.  At every vertex two adjacent squares and three
+    equilateral triangles meet in the cyclic order 3, 3, 3, 4, 4.  Both
+    polygon types share every edge with a neighbour of the other type
+    (square edges are shared with triangles; triangle base edges are shared
+    with squares).
+
+    The layout uses an oblique lattice with primitive vectors::
+
+        a1 = step · (1,      0              )
+        a2 = step · (−1/2,   (2+√3)/2       )
+
+    where ``step = cell_size + wall_t``.  Each unit cell (one lattice point)
+    holds three polygons:
+
+    * Square  : offset ``(step/2,   step/2            )``  n=4, rot=45°
+    * Up-△    : offset ``(step/2,   step·(6+√3)/6     )``  n=3, rot=90°
+    * Down-△  : offset ``(0,        step·(3+√3)/3     )``  n=3, rot=270°
+
+    The ``a2`` vector has a negative x-component (``−step/2``), introducing
+    a leftward x-drift of ``step/2`` per row.  Over ``n_rows`` rows the
+    accumulated drift is ``n_rows·step/2``.  In column units (one column =
+    one ``a1x = step``) that is ``n_rows/2``.  The column range is extended
+    on the right by ``extra_cols = ⌈n_rows/2⌉ + 2`` to ensure full coverage
+    at all Y positions.
+    """
+
+    display_name = "Elongated Triangular (3.3.3.4.4)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Largest polygon is the square; circumradius of a square with side s
+        # is s · √2 / 2.
+        return cell_size * math.sqrt(2) / 2.0
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        h    = step * sq3 / 2.0           # equilateral-triangle height
+
+        # Primitive lattice vectors
+        a1x  = step
+        a2x  = -step / 2.0
+        a2y  = step * (2.0 + sq3) / 2.0  # = step + h
+
+        # Basis offsets from the lattice point (lx, ly)
+        sq_dx = step / 2.0
+        sq_dy = step / 2.0
+        up_dx = step / 2.0
+        up_dy = step + h / 3.0            # = step + step·√3/6 = step·(6+√3)/6
+        dn_dx = 0.0
+        dn_dy = step + 2.0 * h / 3.0     # = step + step·√3/3 = step·(3+√3)/3
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_rows = int((gy1 - gy0) / a2y) + 3
+        n_cols = int((gx1 - gx0) / a1x) + 3
+
+        # a2x < 0: leftward x-drift accumulates as row increases.  Over
+        # n_rows rows the total drift is n_rows·step/2.  In column units
+        # (a1x = step per column) that is n_rows/2.  Extend the column range
+        # on the right by extra_cols so no cell is missed at large row values.
+        extra_cols = int(math.ceil(n_rows / 2.0)) + 2
+
+        for row in range(-1, n_rows + 1):
+            ly = gy0 + row * a2y
+            for col in range(-1, n_cols + 1 + extra_cols):
+                lx = gx0 + col * a1x + row * a2x
+
+                # Square — rot=45°
+                cx, cy = lx + sq_dx, ly + sq_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 45.0))
+
+                # Up-pointing triangle (▲) — rot=90° (apex up)
+                cx, cy = lx + up_dx, ly + up_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 90.0))
+
+                # Down-pointing triangle (▽) — rot=270° (apex down)
+                cx, cy = lx + dn_dx, ly + dn_dy
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 270.0))
+
+        return cells
+
+
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
-    "hexagonal":        HexagonalTilingProvider(),
-    "square":           SquareTilingProvider(),
-    "triangular":       TriangularTilingProvider(),
-    "trihexagonal":     TrihexagonalTilingProvider(),
-    "truncated_square": TruncatedSquareTilingProvider(),
-    "snub_square":      SnubSquareTilingProvider(),
+    "hexagonal":             HexagonalTilingProvider(),
+    "square":                SquareTilingProvider(),
+    "triangular":            TriangularTilingProvider(),
+    "trihexagonal":          TrihexagonalTilingProvider(),
+    "truncated_square":      TruncatedSquareTilingProvider(),
+    "snub_square":           SnubSquareTilingProvider(),
+    "elongated_triangular":  ElongatedTriangularTilingProvider(),
 }
 
 

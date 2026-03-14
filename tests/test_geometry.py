@@ -37,6 +37,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     TrihexagonalTilingProvider,
     TruncatedSquareTilingProvider,
     SnubSquareTilingProvider,
+    ElongatedTriangularTilingProvider,
 )
 
 import pytest
@@ -807,12 +808,12 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_six_entries(self):
-        assert len(LATTICE_TYPES) == 6
+    def test_lattice_types_has_seven_entries(self):
+        assert len(LATTICE_TYPES) == 7
 
     def test_required_keys_present(self):
         for key in ("hexagonal", "square", "triangular", "trihexagonal",
-                    "truncated_square", "snub_square"):
+                    "truncated_square", "snub_square", "elongated_triangular"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
 
     def test_all_display_names_are_strings(self):
@@ -820,12 +821,13 @@ class TestLatticeTypes:
             assert isinstance(name, str) and name, f"Bad display name for {key!r}"
 
     def test_get_tiling_provider_returns_correct_types(self):
-        assert isinstance(get_tiling_provider("hexagonal"),        HexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("square"),           SquareTilingProvider)
-        assert isinstance(get_tiling_provider("triangular"),       TriangularTilingProvider)
-        assert isinstance(get_tiling_provider("trihexagonal"),     TrihexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("truncated_square"), TruncatedSquareTilingProvider)
-        assert isinstance(get_tiling_provider("snub_square"),      SnubSquareTilingProvider)
+        assert isinstance(get_tiling_provider("hexagonal"),             HexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("square"),                SquareTilingProvider)
+        assert isinstance(get_tiling_provider("triangular"),            TriangularTilingProvider)
+        assert isinstance(get_tiling_provider("trihexagonal"),          TrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_square"),      TruncatedSquareTilingProvider)
+        assert isinstance(get_tiling_provider("snub_square"),           SnubSquareTilingProvider)
+        assert isinstance(get_tiling_provider("elongated_triangular"),  ElongatedTriangularTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
         with pytest.raises(ValueError):
@@ -1293,4 +1295,105 @@ class TestTilingCells:
         assert abs(low_cells - high_cells) <= 3, (
             f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
             "Possible oblique drift in snub_square tiling."
+        )
+
+    # ── elongated triangular tiling ──────────────────────────────────────
+
+    def test_elongated_triangular_non_empty(self):
+        assert len(self._cells("elongated_triangular")) > 0
+
+    def test_n_sides_correct_for_elongated_triangular(self):
+        """Elongated-triangular cells must be squares (n=4) or triangles (n=3)."""
+        for cx, cy, n, rot in self._cells("elongated_triangular"):
+            assert n in (3, 4), f"Unexpected n_sides={n} in elongated_triangular tiling"
+
+    def test_elongated_triangular_has_both_squares_and_triangles(self):
+        sides = {n for _cx, _cy, n, _rot in self._cells("elongated_triangular")}
+        assert 4 in sides, "Missing squares (n=4) in elongated_triangular tiling"
+        assert 3 in sides, "Missing triangles (n=3) in elongated_triangular tiling"
+
+    def test_elongated_triangular_triangle_to_square_ratio(self):
+        """Elongated-triangular tiling has exactly 2 triangles per square."""
+        cells = self._cells("elongated_triangular")
+        n_sq  = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_sq > 0, "No squares in elongated_triangular tiling"
+        # Allow ±20% tolerance for boundary cropping.
+        assert abs(n_tri / n_sq - 2.0) < 0.20, (
+            f"Expected tri/sq ratio ≈ 2.0, got {n_tri/n_sq:.3f}"
+        )
+
+    def test_elongated_triangular_square_rotation(self):
+        """Elongated-triangular squares must be at rot=45°."""
+        sq_rots = {rot for _cx, _cy, n, rot in self._cells("elongated_triangular") if n == 4}
+        assert 45.0 in sq_rots, "Missing axis-aligned squares (rot=45°) in elongated_triangular"
+
+    def test_elongated_triangular_triangle_rotations(self):
+        """Elongated-triangular must contain both up (90°) and down (270°) triangles."""
+        tri_rots = {rot for _cx, _cy, n, rot in self._cells("elongated_triangular") if n == 3}
+        assert 90.0  in tri_rots, "Missing up-pointing triangles (rot=90°) in elongated_triangular"
+        assert 270.0 in tri_rots, "Missing down-pointing triangles (rot=270°) in elongated_triangular"
+
+    def test_all_centres_within_region_elongated_triangular(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("elongated_triangular"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    def test_no_duplicate_centres_elongated_triangular(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("elongated_triangular")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in elongated_triangular tiling"
+
+    def test_elongated_triangular_circumradius(self):
+        """Elongated-triangular circumradius is the square circumradius = cell_size·√2/2."""
+        p = get_tiling_provider("elongated_triangular")
+        for s in (5.0, 8.0, 12.0):
+            expected = s * math.sqrt(2) / 2.0
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_elongated_triangular_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the nearest centre-to-centre distance is cell_size/√3,
+        corresponding to the up/down triangle pair sharing a vertical edge."""
+        cell_size = 9.0
+        expected  = cell_size / math.sqrt(3)
+        p  = get_tiling_provider("elongated_triangular")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Elongated-triangular min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_elongated_triangular_coverage_uniform_across_y(self):
+        """Elongated-triangular tiling must cover the region uniformly at all Y positions.
+
+        The oblique a2 vector (a2x = −step/2) introduces a leftward x-drift
+        per row.  Without extra_cols the top-right corner of tall regions
+        would be under-populated.
+        """
+        p    = get_tiling_provider("elongated_triangular")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        strip_height = step * (2.0 + sq3) / 2.0   # a2y
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strips of elongated_triangular tiling"
+        assert high_cells > 0, "No cells in top strips of elongated_triangular tiling"
+        # Allow ±3 cells difference for boundary cropping.
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible oblique drift in elongated_triangular tiling."
         )

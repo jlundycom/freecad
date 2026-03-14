@@ -81,6 +81,7 @@ due to the oblique coordinate system.
 | `trihexagonal` | Trihexagonal (3.6.3.6) | `r{6}` | Equilateral triangle + regular hexagon |
 | `truncated_square` | Truncated Square (4.8.8) | `t{4}` | Regular square + regular octagon |
 | `snub_square` | Snub Square (3.3.4.3.4) | `s{4}` | Regular square + equilateral triangle |
+| `elongated_triangular` | Elongated Triangular (3.3.3.4.4) | — | Regular square + equilateral triangle |
 
 ---
 
@@ -121,12 +122,14 @@ would otherwise miss cells.
 
 ---
 
-### Elongated Triangular (3.3.3.4.4)  — vertex figure 3.3.3.4.4
+### ~~Elongated Triangular (3.3.3.4.4)~~ — **DONE** (key `elongated_triangular`)
 
-Rows of squares alternating with rows of double-triangle strips.
-
-* **Lattice**: rectangular, `a1 = (step, 0)`, `a2 = (0, h_sq + h_tri)`.
-* **Basis**: 1 square + 2 triangles per unit cell.
+Implemented in `ElongatedTriangularTilingProvider`.  Alternating strips of
+squares and equilateral triangles.  Oblique lattice `a1 = (step, 0)`,
+`a2 = (−step/2, step·(2+√3)/2)`.  Basis: square at `(step/2, step/2)`,
+up-triangle at `(step/2, step·(6+√3)/6)` rot=90°, down-triangle at
+`(0, step·(3+√3)/3)` rot=270°.  Column range extended right by
+`extra_cols = ⌈n_rows/2⌉ + 2` to compensate for leftward `a2x`-drift.
 
 ---
 
