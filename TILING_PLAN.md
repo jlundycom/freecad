@@ -85,6 +85,7 @@ due to the oblique coordinate system.
 | `truncated_hexagonal` | Truncated Hexagonal (3.12.12) | `t{6}` | Equilateral triangle + regular 12-gon |
 | `small_rhombitrihexagonal` | Small Rhombitrihexagonal (3.4.6.4) | `r{3,6}` | Equilateral triangle + square + regular hexagon |
 | `great_rhombitrihexagonal` | Great Rhombitrihexagonal (4.6.12) | `t{3,6}` | Square + regular hexagon + regular 12-gon |
+| `snub_hexagonal` | Snub Hexagonal (3.3.3.3.6) | `s{6}` | Equilateral triangle + regular hexagon (chiral) |
 
 ---
 
@@ -173,7 +174,7 @@ Polygon ratio: 2 triangles : 3 squares : 1 hexagon per unit cell ✓.
 
 ---
 
-### Snub Hexagonal (3.3.3.3.6)  — symbol `s{6}`
+### ~~Snub Hexagonal (3.3.3.3.6)~~ — **DONE** (key `snub_hexagonal`)
 
 Hexagons surrounded by groups of four triangles each; the remaining gap
 triangles tile between adjacent hexagons.  **Chiral** — only the right-handed

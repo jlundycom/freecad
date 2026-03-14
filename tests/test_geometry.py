@@ -43,6 +43,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     TruncatedHexagonalTilingProvider,
     SmallRhombitrihexagonalTilingProvider,
     GreatRhombitrihexagonalTilingProvider,
+    SnubHexagonalTilingProvider,
 )
 
 import pytest
@@ -813,14 +814,14 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_ten_entries(self):
-        assert len(LATTICE_TYPES) == 10
+    def test_lattice_types_has_eleven_entries(self):
+        assert len(LATTICE_TYPES) == 11
 
     def test_required_keys_present(self):
         for key in ("hexagonal", "square", "triangular", "trihexagonal",
                     "truncated_square", "snub_square", "elongated_triangular",
                     "truncated_hexagonal", "small_rhombitrihexagonal",
-                    "great_rhombitrihexagonal"):
+                    "great_rhombitrihexagonal", "snub_hexagonal"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
 
     def test_all_display_names_are_strings(self):
@@ -838,6 +839,7 @@ class TestLatticeTypes:
         assert isinstance(get_tiling_provider("truncated_hexagonal"),       TruncatedHexagonalTilingProvider)
         assert isinstance(get_tiling_provider("small_rhombitrihexagonal"),  SmallRhombitrihexagonalTilingProvider)
         assert isinstance(get_tiling_provider("great_rhombitrihexagonal"),  GreatRhombitrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("snub_hexagonal"),             SnubHexagonalTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
         with pytest.raises(ValueError):
@@ -1815,6 +1817,169 @@ class TestTilingCells:
         assert abs(left_cells - right_cells) <= 6, (
             f"Cell counts differ: left={left_cells}, right={right_cells}. "
             "Possible x-drift in great_rhombitrihexagonal tiling."
+        )
+
+
+# ===========================================================================
+# Snub Hexagonal tiling (3.3.3.3.6)
+# ===========================================================================
+
+class TestSnubHexagonalTiling:
+    """Unit tests for SnubHexagonalTilingProvider (3.3.3.3.6).
+
+    The tiling is chiral (right-handed).  Each unit cell contains 1 hexagon
+    and 8 equilateral triangles (area identity: 3√3/2 + 8·√3/4 = 7√3/2 =
+    |A1 × A2|).
+    """
+
+    _cell = dict(cell_size=8.0, wall_t=1.5)
+
+    def _cells(self):
+        p = get_tiling_provider("snub_hexagonal")
+        return p.get_cells(0.0, 200.0, 0.0, 200.0, **self._cell)
+
+    # ------------------------------------------------------------------
+    # Basic structure
+    # ------------------------------------------------------------------
+
+    def test_snub_hexagonal_non_empty(self):
+        """Snub hexagonal tiling must return cells for a valid region."""
+        assert len(self._cells()) > 0
+
+    def test_snub_hexagonal_has_hexagons_and_triangles(self):
+        """Snub hexagonal must contain hexagons (n=6) and triangles (n=3)."""
+        sides = {n for _cx, _cy, n, _rot in self._cells()}
+        assert 6 in sides, "Missing hexagons (n=6) in snub_hexagonal tiling"
+        assert 3 in sides, "Missing triangles (n=3) in snub_hexagonal tiling"
+
+    def test_snub_hexagonal_only_hexagons_and_triangles(self):
+        """Snub hexagonal must contain *only* hexagons and triangles."""
+        for _cx, _cy, n, _rot in self._cells():
+            assert n in (3, 6), (
+                f"Unexpected n_sides={n} in snub_hexagonal tiling"
+            )
+
+    def test_snub_hexagonal_triangle_to_hex_ratio(self):
+        """Per unit cell ratio: 8 triangles : 1 hexagon.
+
+        A 20 % tolerance accounts for boundary cropping effects.
+        """
+        p     = get_tiling_provider("snub_hexagonal")
+        cells = p.get_cells(0.0, 500.0, 0.0, 500.0, **self._cell)
+        n_hex = sum(1 for _cx, _cy, n, _rot in cells if n == 6)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_hex > 0, "No hexagons in snub_hexagonal tiling"
+        ratio = n_tri / n_hex
+        assert abs(ratio - 8.0) < 1.6, (           # 20 % of 8 ≈ 1.6
+            f"tri/hex ratio {ratio:.3f} ≠ expected ≈ 8.0"
+        )
+
+    # ------------------------------------------------------------------
+    # Rotations
+    # ------------------------------------------------------------------
+
+    def test_snub_hexagonal_hex_rotation(self):
+        """All hexagons must have rotation 0° (vertex-right orientation)."""
+        hex_rots = {
+            rot for _cx, _cy, n, rot in self._cells() if n == 6
+        }
+        assert hex_rots == {0.0}, (
+            f"Unexpected hexagon rotations in snub_hexagonal: {hex_rots}"
+        )
+
+    def test_snub_hexagonal_triangle_rotations(self):
+        """Both triangle orientations (rot=30° and rot=90°) must be present."""
+        tri_rots = {
+            rot for _cx, _cy, n, rot in self._cells() if n == 3
+        }
+        assert 30.0 in tri_rots, "Missing triangle rot=30° in snub_hexagonal"
+        assert 90.0 in tri_rots, "Missing triangle rot=90° in snub_hexagonal"
+
+    # ------------------------------------------------------------------
+    # Geometric invariants
+    # ------------------------------------------------------------------
+
+    def test_all_centres_within_region_snub_hexagonal(self):
+        """Every cell centre must lie within the requested bounds."""
+        gx0, gx1, gy0, gy1 = 10.0, 190.0, 10.0, 190.0
+        p = get_tiling_provider("snub_hexagonal")
+        for cx, cy, _n, _rot in p.get_cells(gx0, gx1, gy0, gy1, **self._cell):
+            assert gx0 <= cx <= gx1, f"cx={cx} out of [{gx0}, {gx1}]"
+            assert gy0 <= cy <= gy1, f"cy={cy} out of [{gy0}, {gy1}]"
+
+    def test_no_duplicate_centres_snub_hexagonal(self):
+        """No two cells may share the same (cx, cy, n_sides) triple."""
+        seen = set()
+        for cx, cy, n, _rot in self._cells():
+            key = (round(cx, 6), round(cy, 6), n)
+            assert key not in seen, (
+                f"Duplicate cell centre {key} in snub_hexagonal tiling"
+            )
+            seen.add(key)
+
+    def test_snub_hexagonal_empty_region(self):
+        """Zero-width and zero-height regions must return an empty list."""
+        p = get_tiling_provider("snub_hexagonal")
+        assert p.get_cells(50.0, 50.0, 0.0, 100.0, 8.0, 1.5) == []
+        assert p.get_cells(0.0, 100.0, 50.0, 50.0, 8.0, 1.5) == []
+
+    def test_snub_hexagonal_circumradius(self):
+        """Circumradius must equal cell_size (hexagon circumradius = edge length)."""
+        p = get_tiling_provider("snub_hexagonal")
+        for s in (5.0, 8.0, 12.0):
+            assert abs(p.cell_circumradius(s) - s) < 1e-9, (
+                f"Circumradius({s}) = {p.cell_circumradius(s):.6f} ≠ {s}"
+            )
+
+    def test_snub_hexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the minimum centre-to-centre distance is step/√3.
+
+        This is the distance between the centres of two edge-sharing equilateral
+        triangles: 2 × apothem = 2 × (s / (2√3)) = s/√3.
+        """
+        cell_size = 9.0
+        sq3       = math.sqrt(3.0)
+        step      = cell_size          # wall_t = 0
+        expected  = step / sq3
+
+        p   = get_tiling_provider("snub_hexagonal")
+        cs  = p.get_cells(0.0, 200.0, 0.0, 200.0, cell_size, 0.0)
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        min_dist = float("inf")
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Snub-hexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_snub_hexagonal_coverage_uniform_across_y(self):
+        """Tiling must cover the region uniformly at all Y positions.
+
+        The positive A1y = step·√3/2 introduces an upward y-drift per column
+        index.  Without extra_rows_bot compensation, cells at the bottom of
+        wide regions would be missed.
+        """
+        p = get_tiling_provider("snub_hexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3.0)
+        strip_height = step * 3.0 * sq3 / 2.0   # A2y — one row spacing
+
+        gx0, gx1 = 0.0, 500.0
+        gy0, gy1 = 0.0, 200.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        bottom_cells = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        top_cells    = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert bottom_cells > 0, "No cells in bottom strip of snub_hexagonal tiling"
+        assert top_cells    > 0, "No cells in top strip of snub_hexagonal tiling"
+        assert abs(bottom_cells - top_cells) <= 15, (
+            f"Cell counts differ: bottom={bottom_cells}, top={top_cells}. "
+            "Possible y-drift in snub_hexagonal tiling."
         )
 
 

@@ -95,6 +95,7 @@ LATTICE_TYPES = {
     "truncated_hexagonal":         "Truncated Hexagonal (3.12.12)",
     "small_rhombitrihexagonal":    "Small Rhombitrihexagonal (3.4.6.4)",
     "great_rhombitrihexagonal":    "Great Rhombitrihexagonal (4.6.12)",
+    "snub_hexagonal":              "Snub Hexagonal (3.3.3.3.6)",
 }
 
 
@@ -1022,6 +1023,110 @@ class GreatRhombitrihexagonalTilingProvider(TilingProvider):
         return cells
 
 
+class SnubHexagonalTilingProvider(TilingProvider):
+    """Snub hexagonal (snub trihexagonal) tiling — Schläfli vertex figure 3.3.3.3.6.
+
+    Each vertex is surrounded by four equilateral triangles and one regular
+    hexagon (in that cyclic order).  The tiling is **chiral**; only the
+    right-handed variant is generated here (the left-handed mirror image
+    would require negating all y-offsets in the basis).
+
+    The layout uses an oblique Bravais lattice with primitive vectors::
+
+        A1 = step × (5/2,   √3/2  )
+        A2 = step × ( 1/2, 3√3/2  )
+
+    where ``step = cell_size + wall_t``.  One hexagon occupies each lattice
+    point; **8 equilateral triangles** fill the remaining space of each unit
+    cell (proven by the area identity: 3√3/2 + 8·√3/4 = 7√3/2 = |A1 × A2|).
+
+    Each unit cell holds **1 hexagon and 8 triangles**:
+
+    * Hexagon          at ``(0, 0)``,                    rot=0°
+    * Triangle 1       at ``(+step,   -step·√3/3)``,     rot=90°  (edge V₅V₀)
+    * Triangle 2       at ``(+step,   +step·√3/3)``,     rot=30°  (edge V₀V₁)
+    * Triangle 3       at ``(0,       +2·step·√3/3)``,   rot=90°  (edge V₁V₂)
+    * Triangle 4       at ``(-step,   +step·√3/3)``,     rot=30°  (edge V₂V₃)
+    * Triangle 5       at ``(-step,   -step·√3/3)``,     rot=90°  (edge V₃V₄)
+    * Triangle 6       at ``(0,       -2·step·√3/3)``,   rot=30°  (edge V₄V₅)
+    * Triangle 7       at ``(-step/2, +5·step·√3/6)``,   rot=30°  (inner gap)
+    * Triangle 8       at ``(+step,   +2·step·√3/3)``,   rot=90°  (inner gap)
+
+    **Drift compensation** (both lattice vectors have positive x and y
+    components):
+
+    * ``A1y = step·√3/2 > 0``: upward y-drift per column index.  Extend the
+      row range downward by ``extra_rows_bot = ⌈n_cols/3⌉ + 2``.
+    * ``A2x = step/2 > 0``: rightward x-drift per row index.  Extend the
+      column range leftward by ``extra_cols = ⌈n_rows/5⌉ + 2``.
+    """
+
+    display_name = "Snub Hexagonal (3.3.3.3.6)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Largest polygon is the hexagon.
+        # For a regular hexagon, circumradius = edge length.
+        return cell_size
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3.0)
+
+        # Primitive lattice vectors
+        A1x = step * 2.5           # 5/2
+        A1y = step * sq3 / 2.0
+        A2x = step / 2.0
+        A2y = step * 3.0 * sq3 / 2.0
+
+        # Pre-compute triangle basis offsets (ox, oy, rot_deg)
+        # 6 "edge" triangles surrounding the hexagon + 2 "gap" triangles
+        s3_3  = sq3 / 3.0           # √3/3 = 1/√3
+        s2_3  = sq3 * 2.0 / 3.0    # 2√3/3
+        s5_6  = sq3 * 5.0 / 6.0    # 5√3/6
+
+        basis = [
+            # (ox, oy, rot_deg)
+            ( step,          -step * s3_3,  90.0),   # tri 1  V₅V₀
+            ( step,           step * s3_3,  30.0),   # tri 2  V₀V₁
+            ( 0.0,            step * s2_3,  90.0),   # tri 3  V₁V₂
+            (-step,           step * s3_3,  30.0),   # tri 4  V₂V₃
+            (-step,          -step * s3_3,  90.0),   # tri 5  V₃V₄
+            ( 0.0,           -step * s2_3,  30.0),   # tri 6  V₄V₅
+            (-step / 2.0,     step * s5_6,  30.0),   # tri 7  inner gap near V₂
+            ( step,           step * s2_3,  90.0),   # tri 8  inner gap near V₁
+        ]
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_cols = int((gx1 - gx0) / A1x) + 3
+        n_rows = int((gy1 - gy0) / A2y) + 3
+
+        # A1y > 0: upward y-drift per col → extend row range downward
+        extra_rows_bot = int(math.ceil(n_cols / 3.0)) + 2
+        # A2x > 0: rightward x-drift per row → extend col range leftward
+        extra_cols = int(math.ceil(n_rows / 5.0)) + 2
+
+        for row in range(-1 - extra_rows_bot, n_rows + 2):
+            for col in range(-1 - extra_cols, n_cols + 2):
+                lx = gx0 + col * A1x + row * A2x
+                ly = gy0 + col * A1y + row * A2y
+
+                # Hexagon at lattice point — rot=0° (vertex at 0°, flat-side top)
+                if gx0 <= lx <= gx1 and gy0 <= ly <= gy1:
+                    cells.append((lx, ly, 6, 0.0))
+
+                # Triangles
+                for ox, oy, rot in basis:
+                    cx = lx + ox
+                    cy = ly + oy
+                    if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                        cells.append((cx, cy, 3, rot))
+
+        return cells
+
+
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
     "hexagonal":                     HexagonalTilingProvider(),
@@ -1034,6 +1139,7 @@ _TILING_PROVIDERS = {
     "truncated_hexagonal":           TruncatedHexagonalTilingProvider(),
     "small_rhombitrihexagonal":      SmallRhombitrihexagonalTilingProvider(),
     "great_rhombitrihexagonal":      GreatRhombitrihexagonalTilingProvider(),
+    "snub_hexagonal":                SnubHexagonalTilingProvider(),
 }
 
 
