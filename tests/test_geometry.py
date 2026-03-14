@@ -982,3 +982,41 @@ class TestTilingCells:
         for s in (5.0, 8.0, 12.0):
             expected = s / math.sqrt(3)
             assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    # ── triangular tiling uniform coverage (regression for oblique-drift bug) ─
+
+    def test_triangular_coverage_uniform_across_y(self):
+        """Triangular tiling must have the same cell density at all Y positions.
+
+        The old oblique-lattice implementation accumulated an X drift as the
+        row index increased, causing cells near the top of the region to be
+        missed (the lattice shifted out of bounds on the left).  This test
+        verifies that the count per horizontal strip is the same at the
+        bottom and top of a tall region.
+        """
+        p    = get_tiling_provider("triangular")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        h    = step * math.sqrt(3) / 2.0
+
+        # Tall region: many strips, so oblique drift would be noticeable
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        # Count cells in the first two strips (low Y) vs the last two strips (high Y)
+        strip_height = h
+        low_cells  = sum(1 for cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells > 0,  "No cells in bottom strips"
+        assert high_cells > 0, "No cells in top strips"
+        # The region width (200 mm) and strip height (≈9.96 mm) produce ~17
+        # cells per strip.  Boundary cropping may include or exclude cells
+        # exactly on the edge, so a tolerance of ±2 (roughly 10% of ~17)
+        # is generous enough to avoid flakiness while being far below the
+        # magnitude of the bug (which produced 0 vs 86).
+        assert abs(low_cells - high_cells) <= 2, (
+            f"Cell counts differ: bottom strips={low_cells}, top strips={high_cells}. "
+            "Likely cause: oblique drift in triangular tiling."
+        )

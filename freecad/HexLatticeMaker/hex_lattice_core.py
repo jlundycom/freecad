@@ -233,16 +233,23 @@ class TriangularTilingProvider(TilingProvider):
     Equilateral triangles in alternating up-pointing (▲, rotation=90°) and
     down-pointing (▽, rotation=270°) orientations.
 
-    The unit cell uses an oblique lattice with vectors (``step = cell_size + wall_t``,
-    ``h = step * sqrt(3) / 2``)::
+    Each horizontal strip of height ``h = step * sqrt(3) / 2`` (where
+    ``step = cell_size + wall_t``) holds one row of UP centroids and one row
+    of DOWN centroids.  Odd-numbered strips are shifted right by ``step / 2``
+    relative to even-numbered strips so that the triangles mesh correctly.
 
-        a1 = (step,        0  )
-        a2 = (step * 0.5,  h  )
+    Strip ``r`` cell-centre formulae::
 
-    and two basis triangles per cell:
+        row_x_offset = (r % 2) * (step / 2)
 
-    * UP   at offset ``(step * 0.5,  h / 3.0)``       relative to the lattice point
-    * DOWN at offset ``(step,        h * 2.0 / 3.0)`` relative to the lattice point
+        UP   centroid: cx = gx0 + col * step + step / 2 + row_x_offset
+                       cy = gy0 + r * h + h / 3
+
+        DOWN centroid: cx = gx0 + col * step + step     + row_x_offset
+                       cy = gy0 + r * h + 2 * h / 3
+
+    This rectangular-strip layout avoids any oblique drift, so the pattern
+    tiles uniformly regardless of how high (large Y) the region extends.
     """
 
     display_name = "Triangular (3.3.3.3.3.3)"
@@ -253,30 +260,31 @@ class TriangularTilingProvider(TilingProvider):
 
     def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
         step = cell_size + wall_t
-        h    = step * math.sqrt(3) / 2.0   # oblique lattice row height
+        h    = step * math.sqrt(3) / 2.0   # strip height
 
         cells = []
         if gx1 <= gx0 or gy1 <= gy0:
             return cells
 
-        n_cols = int((gx1 - gx0) / step) + 4
-        n_rows = int((gy1 - gy0) / h)     + 4
+        n_rows = int((gy1 - gy0) / h)    + 3
+        n_cols = int((gx1 - gx0) / step) + 3
 
-        for row in range(-2, n_rows + 2):
-            for col in range(-2, n_cols + 2):
-                # Oblique lattice point: a1=(step,0), a2=(step/2, h)
-                lx = gx0 + col * step + row * (step * 0.5)
-                ly = gy0 + row * h
+        for row in range(-1, n_rows + 1):
+            # Even strips: row_x_offset=0; odd strips: row_x_offset=step/2.
+            # This alternating shift makes adjacent strips mesh into a proper
+            # triangular tiling with no oblique drift as Y grows.
+            row_x_offset = (row % 2) * (step * 0.5)
 
+            for col in range(-1, n_cols + 1):
                 # UP-pointing triangle (▲): apex at top, rotation = 90°
-                cx = lx + step * 0.5
-                cy = ly + h / 3.0
+                cx = gx0 + col * step + step * 0.5 + row_x_offset
+                cy = gy0 + row * h + h / 3.0
                 if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
                     cells.append((cx, cy, 3, 90.0))
 
                 # DOWN-pointing triangle (▽): apex at bottom, rotation = 270°
-                cx = lx + step
-                cy = ly + h * 2.0 / 3.0
+                cx = gx0 + col * step + step + row_x_offset
+                cy = gy0 + row * h + h * 2.0 / 3.0
                 if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
                     cells.append((cx, cy, 3, 270.0))
 
