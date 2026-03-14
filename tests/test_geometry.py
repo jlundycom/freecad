@@ -29,6 +29,11 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     MIN_SEG_RATIO,
     PIN_RADIUS_RATIO,
     TAPER_RATIO,
+    LATTICE_TYPES,
+    get_tiling_provider,
+    HexagonalTilingProvider,
+    SquareTilingProvider,
+    TriangularTilingProvider,
 )
 
 import pytest
@@ -783,3 +788,197 @@ class TestTaperRatio:
             tab_at_z   = td_bot + frac * (td_top - td_bot)
             slot_at_z  = tab_at_z + fit
             assert abs(slot_at_z - tab_at_z - fit) < 1e-9
+
+
+# ===========================================================================
+# LATTICE_TYPES registry
+# ===========================================================================
+
+# Relative tolerance used for geometric spacing checks.  An absolute tolerance
+# would need to change whenever cell_size changes; 1 % of the expected spacing
+# is loose enough to survive floating-point accumulation across many lattice
+# steps while tight enough to catch real implementation errors.
+_SPACING_RTOL = 0.01
+
+
+class TestLatticeTypes:
+    """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
+
+    def test_lattice_types_has_three_entries(self):
+        assert len(LATTICE_TYPES) == 3
+
+    def test_required_keys_present(self):
+        for key in ("hexagonal", "square", "triangular"):
+            assert key in LATTICE_TYPES, f"Missing key {key!r}"
+
+    def test_all_display_names_are_strings(self):
+        for key, name in LATTICE_TYPES.items():
+            assert isinstance(name, str) and name, f"Bad display name for {key!r}"
+
+    def test_get_tiling_provider_returns_correct_types(self):
+        assert isinstance(get_tiling_provider("hexagonal"),  HexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("square"),     SquareTilingProvider)
+        assert isinstance(get_tiling_provider("triangular"), TriangularTilingProvider)
+
+    def test_get_tiling_provider_unknown_key_raises(self):
+        with pytest.raises(ValueError):
+            get_tiling_provider("nonexistent_tiling")
+
+    def test_display_names_unique(self):
+        names = list(LATTICE_TYPES.values())
+        assert len(names) == len(set(names)), "Duplicate display names in LATTICE_TYPES"
+
+
+# ===========================================================================
+# TilingProvider: get_cells()
+# ===========================================================================
+
+class TestTilingCells:
+    """Tests that all tiling providers produce valid cell output.
+
+    All tests are pure Python (no FreeCAD required) because get_cells()
+    returns plain (cx, cy, n_sides, rotation_deg) tuples.
+    """
+
+    _region = dict(gx0=10.0, gx1=190.0, gy0=10.0, gy1=190.0)
+    _cell   = dict(cell_size=8.0, wall_t=1.5)
+
+    def _cells(self, key):
+        p = get_tiling_provider(key)
+        return p.get_cells(**self._region, **self._cell)
+
+    # ── basic output shape ────────────────────────────────────────────────
+
+    def test_hexagonal_non_empty(self):
+        assert len(self._cells("hexagonal")) > 0
+
+    def test_square_non_empty(self):
+        assert len(self._cells("square")) > 0
+
+    def test_triangular_non_empty(self):
+        assert len(self._cells("triangular")) > 0
+
+    def test_each_cell_is_4_tuple(self):
+        for key in LATTICE_TYPES:
+            for cell in self._cells(key):
+                assert len(cell) == 4, f"[{key}] cell must be (cx,cy,n,rot)"
+
+    def test_n_sides_correct_for_hexagonal(self):
+        for cx, cy, n, rot in self._cells("hexagonal"):
+            assert n == 6
+
+    def test_n_sides_correct_for_square(self):
+        for cx, cy, n, rot in self._cells("square"):
+            assert n == 4
+
+    def test_n_sides_correct_for_triangular(self):
+        for cx, cy, n, rot in self._cells("triangular"):
+            assert n == 3
+
+    def test_triangular_has_two_rotations(self):
+        """Triangular tiling must have both up (90°) and down (270°) triangles."""
+        rotations = {rot for _cx, _cy, _n, rot in self._cells("triangular")}
+        assert 90.0  in rotations, "Missing up-pointing triangles (rotation=90)"
+        assert 270.0 in rotations, "Missing down-pointing triangles (rotation=270)"
+
+    # ── centres within bounds ─────────────────────────────────────────────
+
+    def test_all_centres_within_region_hexagonal(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("hexagonal"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    def test_all_centres_within_region_square(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("square"):
+            assert r["gx0"] <= cx <= r["gx1"]
+            assert r["gy0"] <= cy <= r["gy1"]
+
+    def test_all_centres_within_region_triangular(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("triangular"):
+            assert r["gx0"] <= cx <= r["gx1"]
+            assert r["gy0"] <= cy <= r["gy1"]
+
+    # ── no duplicate centres ──────────────────────────────────────────────
+
+    def test_no_duplicate_centres_hexagonal(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("hexagonal")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in hexagonal tiling"
+
+    def test_no_duplicate_centres_square(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("square")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in square tiling"
+
+    def test_no_duplicate_centres_triangular(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("triangular")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in triangular tiling"
+
+    # ── empty region returns empty list ───────────────────────────────────
+
+    def test_empty_region_returns_empty(self):
+        for key in LATTICE_TYPES:
+            p = get_tiling_provider(key)
+            result = p.get_cells(50.0, 50.0, 0.0, 100.0, 8.0, 1.5)
+            assert result == [], f"[{key}] expected [] for zero-width region"
+
+    # ── centre-to-centre spacing (wall_t=0 sanity check) ─────────────────
+
+    def test_square_spacing_at_zero_wall(self):
+        """With wall_t=0, adjacent square centres should be exactly cell_size apart."""
+        cell_size = 10.0
+        p  = get_tiling_provider("square")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        # Group by approximate y row
+        rows = {}
+        for cx, cy, _n, _rot in cs:
+            key = round(cy, 4)
+            rows.setdefault(key, []).append(cx)
+        for y_key, xs in rows.items():
+            xs_sorted = sorted(xs)
+            for a, b in zip(xs_sorted[:-1], xs_sorted[1:]):
+                assert abs((b - a) - cell_size) < cell_size * _SPACING_RTOL, (
+                    f"Square row y≈{y_key}: spacing {b-a:.4f} ≠ {cell_size}"
+                )
+
+    def test_triangular_adjacent_distance_at_zero_wall(self):
+        """With wall_t=0, the nearest neighbour distance in the triangular tiling
+        should equal cell_size / sqrt(3) (centroid-to-centroid for shared edge)."""
+        cell_size = 9.0
+        expected  = cell_size / math.sqrt(3)
+        p  = get_tiling_provider("triangular")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        # Find minimum pairwise distance (should equal the expected adjacency dist)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Triangular min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    # ── circumradius ──────────────────────────────────────────────────────
+
+    def test_hexagonal_circumradius_equals_cell_size(self):
+        p = get_tiling_provider("hexagonal")
+        for s in (5.0, 8.0, 12.0):
+            assert abs(p.cell_circumradius(s) - s) < 1e-9
+
+    def test_square_circumradius(self):
+        p = get_tiling_provider("square")
+        for s in (5.0, 8.0, 12.0):
+            expected = s * math.sqrt(2) / 2.0
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_triangular_circumradius(self):
+        p = get_tiling_provider("triangular")
+        for s in (5.0, 8.0, 12.0):
+            expected = s / math.sqrt(3)
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9

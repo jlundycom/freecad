@@ -9,6 +9,11 @@ try:
 except ImportError:
     from PySide6 import QtWidgets, QtCore
 
+try:
+    from .hex_lattice_core import LATTICE_TYPES
+except ImportError:
+    from hex_lattice_core import LATTICE_TYPES
+
 
 class HexLatticeDialog(QtWidgets.QDialog):
     """Modal dialog for hex-lattice part creation parameters."""
@@ -38,11 +43,17 @@ class HexLatticeDialog(QtWidgets.QDialog):
         self.wall_spin       = _spin( 0.5,    10.0,   1.5, dec=2)
         self.max_piece_spin  = _spin(10.0,   220.0, 220.0)
 
+        # Lattice type combobox – populated from the core's LATTICE_TYPES dict
+        self.lattice_combo = QtWidgets.QComboBox()
+        for key, display_name in LATTICE_TYPES.items():
+            self.lattice_combo.addItem(display_name, key)
+
         form.addRow("Width  (X):",              self.width_spin)
         form.addRow("Length (Y):",              self.length_spin)
         form.addRow("Height (Z):",              self.height_spin)
         form.addRow("Perimeter width:",         self.perim_spin)
-        form.addRow("Hexagon size\n(side length):", self.hex_spin)
+        form.addRow("Lattice type:",            self.lattice_combo)
+        form.addRow("Cell size\n(side length):", self.hex_spin)
         form.addRow("Wall thickness:",          self.wall_spin)
         form.addRow("Max piece size:",          self.max_piece_spin)
 
@@ -50,7 +61,7 @@ class HexLatticeDialog(QtWidgets.QDialog):
         self._info_label = QtWidgets.QLabel(
             "<i>Parts wider/longer than <b>Max piece size</b> are automatically\n"
             "sliced into interlocking finger-joint pieces for 3-D printing.\n"
-            "<b>Wall thickness</b> sets the material between hex cells.</i>"
+            "<b>Wall thickness</b> sets the material between lattice cells.</i>"
         )
         self._info_label.setWordWrap(True)
 
@@ -77,6 +88,7 @@ class HexLatticeDialog(QtWidgets.QDialog):
             "hex_size":       self.hex_spin.value(),
             "wall_thickness": self.wall_spin.value(),
             "max_piece_size": self.max_piece_spin.value(),
+            "lattice_type":   self.lattice_combo.currentData(),
         }
 
 

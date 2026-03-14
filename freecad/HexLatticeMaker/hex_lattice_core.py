@@ -78,6 +78,241 @@ TAPER_RATIO      = 0.20    # finger-joint draft: top depth = tab_d*(1+ratio),
 
 
 # ---------------------------------------------------------------------------
+# Tiling abstraction
+# ---------------------------------------------------------------------------
+
+#: Ordered mapping of tiling key → display name for the UI dropdown.
+#: Only the three regular-polygon tilings are implemented in Phase 1.
+#: See TILING_PLAN.md for the plan to add the remaining 8 semi-regular tilings.
+LATTICE_TYPES = {
+    "hexagonal":  "Hexagonal (6.6.6)",
+    "square":     "Square (4.4.4.4)",
+    "triangular": "Triangular (3.3.3.3.3.3)",
+}
+
+
+class TilingProvider:
+    """Abstract base for euclidean uniform tiling providers.
+
+    Subclasses implement :meth:`get_cells` to return cell centre coordinates
+    and polygon descriptors for a given rectangular interior region.
+
+    To add a new tiling:
+
+    1. Subclass ``TilingProvider`` and override ``display_name``,
+       ``cell_circumradius``, and ``get_cells``.
+    2. Register the instance in ``_TILING_PROVIDERS``.
+    3. Add an entry to ``LATTICE_TYPES``.
+
+    See ``TILING_PLAN.md`` in the repository root for implementation guidance
+    for the remaining semi-regular tilings.
+    """
+
+    #: Human-readable name shown in the UI dropdown.
+    display_name: str = ""
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        """Circumradius of a single cell polygon (mm).
+
+        Used for bounding-circle exclusion and overlap checks.  For tilings
+        with multiple polygon types (semi-regular), return the circumradius
+        of the *largest* polygon so that no cell is incorrectly pruned.
+
+        Parameters
+        ----------
+        cell_size : polygon side length (mm)
+
+        Returns
+        -------
+        float : circumradius of the cell polygon with the given side length
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement cell_circumradius()"
+        )
+
+    def get_cells(
+        self,
+        gx0: float, gx1: float,
+        gy0: float, gy1: float,
+        cell_size: float,
+        wall_t: float,
+    ) -> list:
+        """Return cell descriptors that fall inside the interior region.
+
+        Parameters
+        ----------
+        gx0, gx1, gy0, gy1 : axis-aligned interior region bounds (mm)
+        cell_size           : polygon side length (mm)
+        wall_t              : minimum wall thickness between adjacent cells (mm)
+
+        Returns
+        -------
+        list of ``(cx, cy, n_sides, rotation_deg)`` tuples
+            cx, cy       : cell centre coordinates (mm)
+            n_sides      : number of sides of the regular polygon
+            rotation_deg : angle in degrees of the first vertex from +X
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement get_cells()"
+        )
+
+
+class HexagonalTilingProvider(TilingProvider):
+    """Regular hexagonal tiling — Schläfli symbol {6}, vertex figure 6.6.6.
+
+    Uses pointy-top hexagons (first vertex at 30° from +X).  The grid is the
+    standard offset-row hex grid: odd rows are shifted right by half the
+    horizontal spacing.
+    """
+
+    display_name = "Hexagonal (6.6.6)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Circumradius of a regular hexagon equals its side length.
+        return cell_size
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        grid_s = cell_size + wall_t
+        h_sp   = grid_s * math.sqrt(3)   # horizontal centre-to-centre
+        v_sp   = 1.5 * grid_s            # vertical   centre-to-centre
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_cols = int((gx1 - gx0) / h_sp) + 3
+        n_rows = int((gy1 - gy0) / v_sp) + 3
+
+        for row in range(-1, n_rows + 1):
+            cy     = gy0 + row * v_sp + v_sp * 0.5
+            offset = (h_sp * 0.5) if (row % 2 != 0) else 0.0
+            for col in range(-1, n_cols + 1):
+                cx = gx0 + col * h_sp + offset + h_sp * 0.5
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 6, 30.0))
+
+        return cells
+
+
+class SquareTilingProvider(TilingProvider):
+    """Regular square tiling — Schläfli symbol {4}, vertex figure 4.4.4.4.
+
+    Squares are axis-aligned (flat sides on top/bottom/left/right), which
+    corresponds to a first-vertex angle of 45° from +X.
+    """
+
+    display_name = "Square (4.4.4.4)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Circumradius of a square with side s = s * sqrt(2) / 2.
+        return cell_size * math.sqrt(2) / 2.0
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_cols = int((gx1 - gx0) / step) + 3
+        n_rows = int((gy1 - gy0) / step) + 3
+
+        for row in range(-1, n_rows + 1):
+            cy = gy0 + row * step + step * 0.5
+            for col in range(-1, n_cols + 1):
+                cx = gx0 + col * step + step * 0.5
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 4, 45.0))
+
+        return cells
+
+
+class TriangularTilingProvider(TilingProvider):
+    """Regular triangular tiling — Schläfli symbol {3}, vertex figure 3.3.3.3.3.3.
+
+    Equilateral triangles in alternating up-pointing (▲, rotation=90°) and
+    down-pointing (▽, rotation=270°) orientations.
+
+    The unit cell uses an oblique lattice with vectors (``step = cell_size + wall_t``,
+    ``h = step * sqrt(3) / 2``)::
+
+        a1 = (step,        0  )
+        a2 = (step * 0.5,  h  )
+
+    and two basis triangles per cell:
+
+    * UP   at offset ``(step * 0.5,  h / 3.0)``       relative to the lattice point
+    * DOWN at offset ``(step,        h * 2.0 / 3.0)`` relative to the lattice point
+    """
+
+    display_name = "Triangular (3.3.3.3.3.3)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Circumradius of an equilateral triangle with side s = s / sqrt(3).
+        return cell_size / math.sqrt(3)
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step = cell_size + wall_t
+        h    = step * math.sqrt(3) / 2.0   # oblique lattice row height
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_cols = int((gx1 - gx0) / step) + 4
+        n_rows = int((gy1 - gy0) / h)     + 4
+
+        for row in range(-2, n_rows + 2):
+            for col in range(-2, n_cols + 2):
+                # Oblique lattice point: a1=(step,0), a2=(step/2, h)
+                lx = gx0 + col * step + row * (step * 0.5)
+                ly = gy0 + row * h
+
+                # UP-pointing triangle (▲): apex at top, rotation = 90°
+                cx = lx + step * 0.5
+                cy = ly + h / 3.0
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 90.0))
+
+                # DOWN-pointing triangle (▽): apex at bottom, rotation = 270°
+                cx = lx + step
+                cy = ly + h * 2.0 / 3.0
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 3, 270.0))
+
+        return cells
+
+
+#: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
+_TILING_PROVIDERS = {
+    "hexagonal":  HexagonalTilingProvider(),
+    "square":     SquareTilingProvider(),
+    "triangular": TriangularTilingProvider(),
+}
+
+
+def get_tiling_provider(key: str) -> TilingProvider:
+    """Return the :class:`TilingProvider` for *key*.
+
+    Parameters
+    ----------
+    key : one of the keys in :data:`LATTICE_TYPES`
+
+    Raises
+    ------
+    ValueError
+        If *key* is not a known lattice type.
+    """
+    provider = _TILING_PROVIDERS.get(key)
+    if provider is None:
+        raise ValueError(
+            f"Unknown lattice type {key!r}. "
+            f"Valid types: {list(LATTICE_TYPES.keys())}"
+        )
+    return provider
+
+
+# ---------------------------------------------------------------------------
 # Helpers that work without FreeCAD (used in unit tests)
 # ---------------------------------------------------------------------------
 
@@ -136,22 +371,31 @@ def is_excluded(
     x_cuts: list,
     y_cuts: list,
     leg_zones: list = (),
+    cell_r: float = None,
 ) -> bool:
-    """Return True if a hex hole centered at (cx, cy) should be suppressed.
+    """Return True if a cell hole centered at (cx, cy) should be suppressed.
 
     Suppressed zones
     ~~~~~~~~~~~~~~~~
     * Outer perimeter bands (within ``perim_w`` of any edge).
     * Bridge bands at every cut (within ``perim_w/2`` of any cut line).
     * Leg support areas: axis-aligned rectangles supplied via *leg_zones*
-      as ``(x0, y0, x1, y1)`` tuples.  Any hex whose bounding circle
-      (radius = ``hex_size``) overlaps a leg zone is suppressed so that
-      the solid leg-corner material is preserved.
+      as ``(x0, y0, x1, y1)`` tuples.  Any cell whose bounding circle
+      overlaps a leg zone is suppressed so that the solid leg-corner
+      material is preserved.
 
-    A hex is suppressed if its *bounding circle* (radius = hex_size) overlaps
-    any exclusion zone.
+    A cell is suppressed if its *bounding circle* overlaps any exclusion zone.
+
+    Parameters
+    ----------
+    hex_size : cell side length (mm).  Used as the bounding-circle radius
+               when *cell_r* is not provided (backward-compatible default for
+               hexagonal tilings, where circumradius = side length).
+    cell_r   : circumradius of the cell polygon (mm).  When provided, this
+               overrides the ``hex_size`` default so that non-hexagonal cells
+               (squares, triangles, …) are checked with the correct radius.
     """
-    r = hex_size          # bounding-circle radius of a regular hexagon = side length
+    r = hex_size if cell_r is None else cell_r
 
     # Outer perimeter bands
     if cx - r < perim_w:               return True
@@ -193,15 +437,50 @@ def _require_freecad():
 
 
 def make_hex_prism(cx: float, cy: float, side: float, height: float):
-    """Return a FreeCAD Part.Shape: hexagonal prism (pointy-top)."""
+    """Return a FreeCAD Part.Shape: hexagonal prism (pointy-top).
+
+    .. deprecated::
+        Prefer :func:`make_polygon_prism` with ``n_sides=6, rotation_deg=30``.
+        This function is kept for backward compatibility.
+    """
+    return make_polygon_prism(cx, cy, 6, 30.0, side, height)
+
+
+def make_polygon_prism(
+    cx: float, cy: float,
+    n_sides: int,
+    rotation_deg: float,
+    side: float,
+    height: float,
+):
+    """Return a FreeCAD Part.Shape: regular n-gon prism.
+
+    Parameters
+    ----------
+    cx, cy       : centre of the polygon (mm)
+    n_sides      : number of sides (3 = equilateral triangle, 4 = square,
+                   6 = hexagon, etc.)
+    rotation_deg : angle of the first vertex from the +X axis (degrees).
+                   Convention used by :class:`TilingProvider` implementations:
+
+                   * Hexagon (6): 30° → pointy-top
+                   * Square  (4): 45° → axis-aligned (flat sides on top/bottom)
+                   * Triangle UP (3): 90° → apex at top, flat base at bottom
+                   * Triangle DN (3): 270° → apex at bottom, flat base at top
+    side         : side length of the regular polygon (mm)
+    height       : prism height in the Z direction (mm)
+    """
     import FreeCAD as App
     import Part
 
+    # Circumradius: R = side / (2 · sin(π / n))
+    R = side / (2.0 * math.sin(math.pi / n_sides))
+
     verts = []
-    for k in range(6):
-        ang = math.radians(30.0 + 60.0 * k)   # pointy-top: first vertex at 30°
-        verts.append(App.Vector(cx + side * math.cos(ang),
-                                cy + side * math.sin(ang),
+    for k in range(n_sides):
+        ang = math.radians(rotation_deg + k * 360.0 / n_sides)
+        verts.append(App.Vector(cx + R * math.cos(ang),
+                                cy + R * math.sin(ang),
                                 0.0))
     verts.append(verts[0])
     wire = Part.makePolygon(verts)
@@ -453,23 +732,28 @@ def make_piece(
     x_cuts: list,
     y_cuts: list,
     leg_zones: list = (),
+    lattice_type: str = "hexagonal",
 ) -> object:  # returns Part.Shape
-    """Build one interlocking piece of the hex-lattice panel.
+    """Build one interlocking piece of the lattice panel.
 
     Parameters
     ----------
-    ix, iy   : piece grid indices (used for naming; not needed for geometry)
-    x0 … y1  : nominal piece bounds (at cut lines)
-    total_w/l: full-part dimensions
-    height   : part thickness (Z)
-    perim_w  : solid perimeter width
-    hex_size : hexagon side length
-    wall_t   : minimum wall thickness between adjacent hex cells
-    x_cuts   : list of X-cut positions
-    y_cuts   : list of Y-cut positions
-    leg_zones: list of ``(x0, y0, x1, y1)`` rectangles that must remain
-               solid (e.g. leg-corner footprints).  Hex cells whose bounding
-               circle overlaps any zone are suppressed.
+    ix, iy       : piece grid indices (used for naming; not needed for geometry)
+    x0 … y1      : nominal piece bounds (at cut lines)
+    total_w/l    : full-part dimensions
+    height       : part thickness (Z)
+    perim_w      : solid perimeter width
+    hex_size     : cell side length (mm).  Named ``hex_size`` for backward
+                   compatibility; for non-hexagonal tilings this is the side
+                   length of the cell polygon.
+    wall_t       : minimum wall thickness between adjacent cells
+    x_cuts       : list of X-cut positions
+    y_cuts       : list of Y-cut positions
+    leg_zones    : list of ``(x0, y0, x1, y1)`` rectangles that must remain
+                   solid (e.g. leg-corner footprints).  Cells whose bounding
+                   circle overlaps any zone are suppressed.
+    lattice_type : one of the keys in :data:`LATTICE_TYPES`
+                   (default ``"hexagonal"``).
     """
     import FreeCAD as App
     import Part
@@ -484,7 +768,7 @@ def make_piece(
                         App.Vector(x0, y0, 0.0))
 
     # ------------------------------------------------------------------
-    # 2. Hexagonal lattice holes
+    # 2. Lattice holes
     # ------------------------------------------------------------------
     # Interior bounds of the entire part (global perimeter exclusion zone)
     gx0 = perim_w
@@ -493,37 +777,40 @@ def make_piece(
     gy1 = total_l - perim_w
 
     if gx1 > gx0 and gy1 > gy0:
-        centers = hex_centers(gx0, gx1, gy0, gy1, hex_size, wall_t)
-        hex_holes = []
+        provider = get_tiling_provider(lattice_type)
+        cells    = provider.get_cells(gx0, gx1, gy0, gy1, hex_size, wall_t)
+        cell_r   = provider.cell_circumradius(hex_size)
+        cell_holes = []
 
         # Clip box is constant for the whole piece – create it once.
         clip_box = Part.makeBox(x1 - x0, y1 - y0, height,
                                 App.Vector(x0, y0, 0.0))
 
-        for cx, cy in centers:
+        for cx, cy, n_sides, rotation_deg in cells:
             if is_excluded(cx, cy, hex_size, perim_w,
                            total_w, total_l, x_cuts, y_cuts,
-                           leg_zones):
+                           leg_zones, cell_r=cell_r):
                 continue
-            # Hex must overlap this piece's region
-            if (cx + hex_size < x0 or cx - hex_size > x1 or
-                    cy + hex_size < y0 or cy - hex_size > y1):
+            # Cell must overlap this piece's region
+            if (cx + cell_r < x0 or cx - cell_r > x1 or
+                    cy + cell_r < y0 or cy - cell_r > y1):
                 continue
 
-            prism = make_hex_prism(cx, cy, hex_size, height)
+            prism = make_polygon_prism(cx, cy, n_sides, rotation_deg,
+                                       hex_size, height)
 
-            # Only run the (expensive) common() clip for hexes that actually
-            # straddle a piece boundary.  Interior hexes are added as-is.
-            if (cx - hex_size < x0 + 1e-6 or cx + hex_size > x1 - 1e-6 or
-                    cy - hex_size < y0 + 1e-6 or cy + hex_size > y1 - 1e-6):
+            # Only run the (expensive) common() clip for cells that actually
+            # straddle a piece boundary.  Interior cells are added as-is.
+            if (cx - cell_r < x0 + 1e-6 or cx + cell_r > x1 - 1e-6 or
+                    cy - cell_r < y0 + 1e-6 or cy + cell_r > y1 - 1e-6):
                 clipped = prism.common(clip_box)
                 if clipped.Volume > 1e-9:
-                    hex_holes.append(clipped)
+                    cell_holes.append(clipped)
             else:
-                hex_holes.append(prism)
+                cell_holes.append(prism)
 
-        if hex_holes:
-            holes_union = _fuse_shapes(hex_holes)
+        if cell_holes:
+            holes_union = _fuse_shapes(cell_holes)
             body = body.cut(holes_union)
 
     # ------------------------------------------------------------------
@@ -704,20 +991,24 @@ def create_all_pieces(
     hex_size: float,
     wall_thickness: float = None,
     max_piece_size: float = MAX_PIECE_SIZE,
+    lattice_type: str = "hexagonal",
 ) -> list:
-    """Create all interlocking pieces for a hex-lattice flat panel.
+    """Create all interlocking pieces for a lattice flat panel.
 
     Parameters
     ----------
     width, length, height : overall part dimensions (mm)
     perim_width           : solid border width and finger-joint bridge thickness
-    hex_size              : hexagon cell side length (mm)
-    wall_thickness        : minimum wall between hex cells (mm).
+    hex_size              : cell side length (mm).  Named ``hex_size`` for
+                            backward compatibility; applies to any tiling.
+    wall_thickness        : minimum wall between cells (mm).
                             Defaults to ``max(1.2, hex_size * 0.15)``.
     max_piece_size        : maximum printable piece length/width (mm).
                             Panels larger than this are sliced into pieces.
                             The dialog limits this to 1–220 mm to avoid
                             printer exclusion zones.
+    lattice_type          : one of the keys in :data:`LATTICE_TYPES`
+                            (default ``"hexagonal"``).
 
     Returns
     -------
@@ -744,6 +1035,7 @@ def create_all_pieces(
                 height, perim_width, hex_size,
                 wall_thickness,
                 x_cuts, y_cuts,
+                lattice_type=lattice_type,
             )
             pieces.append((f"Piece_{ix}_{iy}", shape))
 
@@ -760,6 +1052,7 @@ def create_shelf_with_legs(
     max_piece_size: float = MAX_PIECE_SIZE,
     leg_height: float = 100.0,
     leg_width: float = 20.0,
+    lattice_type: str = "hexagonal",
 ) -> list:
     """Create all interlocking shelf pieces plus four individual corner legs.
 
@@ -783,14 +1076,17 @@ def create_shelf_with_legs(
     ----------
     width, length, height : overall shelf panel dimensions (mm)
     perim_width           : solid border / finger-joint bridge thickness (mm)
-    hex_size              : hexagon cell side length (mm)
-    wall_thickness        : minimum wall between hex cells (mm).
+    hex_size              : cell side length (mm).  Named ``hex_size`` for
+                            backward compatibility; applies to any tiling.
+    wall_thickness        : minimum wall between cells (mm).
                             Defaults to ``max(1.2, hex_size * 0.15)``.
     max_piece_size        : maximum printable piece size (mm)
     leg_height            : height of the support column below the shelf (mm)
     leg_width             : side length of the square leg / peg cross-section (mm).
                             Must be less than ``perim_width`` so that the socket
                             fits entirely within the solid perimeter band.
+    lattice_type          : one of the keys in :data:`LATTICE_TYPES`
+                            (default ``"hexagonal"``).
 
     Returns
     -------
@@ -880,6 +1176,7 @@ def create_shelf_with_legs(
                 wall_thickness,
                 x_cuts, y_cuts,
                 leg_zones=leg_zones,
+                lattice_type=lattice_type,
             )
 
             # Cut blind sockets and round through-holes that intersect this piece
