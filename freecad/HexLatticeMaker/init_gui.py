@@ -80,6 +80,73 @@ def _build_parts(params: dict):
 
 
 # ---------------------------------------------------------------------------
+# Command: CreateShelfWithLegs
+# ---------------------------------------------------------------------------
+
+class CreateShelfWithLegsCmd:
+    """FreeCAD command that opens the shelf-with-legs dialog and creates parts."""
+
+    def GetResources(self):
+        return {
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "MenuText": "Create Shelf with Legs",
+            "ToolTip":  (
+                "Create a hex-lattice shelf panel with corner holes and "
+                "four individual printable legs that plug into those holes "
+                "to provide vertical support."
+            ),
+        }
+
+    def IsActive(self):
+        return True   # always available
+
+    def Activated(self):
+        """Show dialog, then build and add shapes to the active document."""
+        try:
+            from .create_part_dialog import ShelfWithLegsDialog
+        except ImportError:
+            from create_part_dialog import ShelfWithLegsDialog
+
+        dlg = ShelfWithLegsDialog(Gui.getMainWindow())
+        if dlg.exec_() != dlg.Accepted:
+            return
+
+        params = dlg.get_params()
+        _build_shelf_with_legs(params)
+
+
+def _build_shelf_with_legs(params: dict):
+    """Build shelf pieces and leg parts, then add them to the FreeCAD document."""
+    from .hex_lattice_core import create_shelf_with_legs
+
+    doc = App.activeDocument()
+    if doc is None:
+        doc = App.newDocument("ShelfWithLegs")
+
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Creating shelf with legs: "
+        f"{params['width']} × {params['length']} × {params['height']} mm, "
+        f"legs {params['leg_width']} × {params['leg_height']} mm …\n"
+    )
+
+    pieces = create_shelf_with_legs(**params)
+
+    for name, shape, placement in pieces:
+        obj = doc.addObject("Part::Feature", name)
+        obj.Shape = shape
+        obj.Placement = App.Placement(placement, App.Rotation())
+
+    doc.recompute()
+    Gui.SendMsgToActiveView("ViewFit")
+    leg_count   = sum(1 for n, _s, _p in pieces if n.startswith("Leg_"))
+    shelf_count = len(pieces) - leg_count
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Done – {shelf_count} shelf piece(s) + "
+        f"{leg_count} leg(s) created.\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Workbench definition
 # ---------------------------------------------------------------------------
 
@@ -94,11 +161,14 @@ class HexLatticeMakerWorkbench(Gui.Workbench):
         return "Gui::PythonWorkbench"
 
     def Initialize(self):
-        Gui.addCommand("HexLatticeMaker_CreatePart", CreateHexLatticePartCmd())
+        Gui.addCommand("HexLatticeMaker_CreatePart",      CreateHexLatticePartCmd())
+        Gui.addCommand("HexLatticeMaker_CreateShelfLegs", CreateShelfWithLegsCmd())
         self.appendToolbar("HexLatticeMaker",
-                           ["HexLatticeMaker_CreatePart"])
+                           ["HexLatticeMaker_CreatePart",
+                            "HexLatticeMaker_CreateShelfLegs"])
         self.appendMenu("Hex Lattice",
-                        ["HexLatticeMaker_CreatePart"])
+                        ["HexLatticeMaker_CreatePart",
+                         "HexLatticeMaker_CreateShelfLegs"])
         App.Console.PrintLog("[HexLatticeMaker] Workbench initialised.\n")
 
     def Activated(self):

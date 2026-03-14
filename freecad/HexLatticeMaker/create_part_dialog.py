@@ -20,6 +20,7 @@ class HexLatticeDialog(QtWidgets.QDialog):
 
         form = QtWidgets.QFormLayout()
         form.setLabelAlignment(QtCore.Qt.AlignRight)
+        self._form = form
 
         def _spin(lo, hi, default, dec=1, suffix=" mm"):
             w = QtWidgets.QDoubleSpinBox()
@@ -45,13 +46,13 @@ class HexLatticeDialog(QtWidgets.QDialog):
         form.addRow("Wall thickness:",          self.wall_spin)
         form.addRow("Max piece size:",          self.max_piece_spin)
 
-        # Info label
-        info = QtWidgets.QLabel(
+        # Info label (exposed as self._info_label so subclasses can update text)
+        self._info_label = QtWidgets.QLabel(
             "<i>Parts wider/longer than <b>Max piece size</b> are automatically\n"
             "sliced into interlocking finger-joint pieces for 3-D printing.\n"
             "<b>Wall thickness</b> sets the material between hex cells.</i>"
         )
-        info.setWordWrap(True)
+        self._info_label.setWordWrap(True)
 
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
@@ -61,7 +62,7 @@ class HexLatticeDialog(QtWidgets.QDialog):
 
         main = QtWidgets.QVBoxLayout()
         main.addLayout(form)
-        main.addWidget(info)
+        main.addWidget(self._info_label)
         main.addWidget(buttons)
         self.setLayout(main)
 
@@ -77,3 +78,51 @@ class HexLatticeDialog(QtWidgets.QDialog):
             "wall_thickness": self.wall_spin.value(),
             "max_piece_size": self.max_piece_spin.value(),
         }
+
+
+class ShelfWithLegsDialog(HexLatticeDialog):
+    """Modal dialog for shelf-with-legs creation parameters.
+
+    Extends :class:`HexLatticeDialog` with two additional fields:
+
+    * **Leg height** – total printed height of each corner leg.
+    * **Leg width** – side length of the square leg cross-section.
+      Must be smaller than the perimeter width so the corner holes fit
+      entirely within the solid perimeter band.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Shelf with Legs")
+
+        def _spin(lo, hi, default, dec=1, suffix=" mm"):
+            w = QtWidgets.QDoubleSpinBox()
+            w.setRange(lo, hi)
+            w.setValue(default)
+            w.setDecimals(dec)
+            w.setSuffix(suffix)
+            return w
+
+        self.leg_height_spin = _spin(10.0, 2000.0, 100.0)
+        self.leg_width_spin  = _spin( 5.0,   100.0,  20.0)
+
+        self._form.addRow("Leg height:",                 self.leg_height_spin)
+        self._form.addRow("Leg width\n(cross-section):", self.leg_width_spin)
+
+        # Update the shared info label text (avoids any duplicate-widget issues)
+        self._info_label.setText(
+            "<i>Parts wider/longer than <b>Max piece size</b> are automatically "
+            "sliced into interlocking finger-joint pieces for 3-D printing. "
+            "<b>Leg width</b> must be smaller than <b>Perimeter width</b> so "
+            "that the corner holes fit within the solid perimeter band. "
+            "The top of each leg is a peg that inserts into a blind hole in "
+            "the shelf; the leg body rests below the shelf.</i>"
+        )
+
+    # ------------------------------------------------------------------
+    def get_params(self) -> dict:
+        """Return dialog values including leg dimensions."""
+        params = super().get_params()
+        params["leg_height"] = self.leg_height_spin.value()
+        params["leg_width"]  = self.leg_width_spin.value()
+        return params
