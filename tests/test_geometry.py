@@ -44,6 +44,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     SmallRhombitrihexagonalTilingProvider,
     GreatRhombitrihexagonalTilingProvider,
     SnubHexagonalTilingProvider,
+    _step_joint_z_extents,
 )
 
 import pytest
@@ -798,6 +799,128 @@ class TestTaperRatio:
             tab_at_z   = td_bot + frac * (td_top - td_bot)
             slot_at_z  = tab_at_z + fit
             assert abs(slot_at_z - tab_at_z - fit) < 1e-9
+
+
+# ===========================================================================
+# Stepped shelf joint — pure-Python geometry helper
+# ===========================================================================
+
+class TestStepJointZExtents:
+    """Tests for ``_step_joint_z_extents`` — pure Python, no FreeCAD required."""
+
+    # ── Boundary: step always at exactly half-height ──────────────────
+
+    def test_step_boundary_is_half_height(self):
+        """The Z boundary between tab and slot is always exactly height/2."""
+        for h in (4.0, 10.0, 20.0):
+            tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(0, h, 'left')
+            assert abs(tab_z1 - h * 0.5) < 1e-9 and abs(slt_z0 - h * 0.5) < 1e-9
+
+    # ── Left piece, even finger → lower tab ──────────────────────────
+
+    def test_left_even_finger_has_lower_tab(self):
+        """left piece, finger 0: tab at z=0..h/2, slot at z=h/2..h."""
+        h = 10.0
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(0, h, 'left')
+        assert abs(tab_z0 - 0.0) < 1e-9
+        assert abs(tab_z1 - 5.0) < 1e-9
+        assert abs(slt_z0 - 5.0) < 1e-9
+        assert abs(slt_z1 - 10.0) < 1e-9
+
+    def test_left_odd_finger_has_upper_tab(self):
+        """left piece, finger 1: tab at z=h/2..h, slot at z=0..h/2."""
+        h = 10.0
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(1, h, 'left')
+        assert abs(tab_z0 - 5.0) < 1e-9
+        assert abs(tab_z1 - 10.0) < 1e-9
+        assert abs(slt_z0 - 0.0) < 1e-9
+        assert abs(slt_z1 - 5.0) < 1e-9
+
+    # ── Right piece: complementary pattern ───────────────────────────
+
+    def test_right_even_finger_has_upper_tab(self):
+        """right piece, finger 0: tab at z=h/2..h (complement of left even)."""
+        h = 10.0
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(0, h, 'right')
+        assert abs(tab_z0 - 5.0) < 1e-9
+        assert abs(tab_z1 - 10.0) < 1e-9
+
+    def test_right_odd_finger_has_lower_tab(self):
+        """right piece, finger 1: tab at z=0..h/2 (complement of left odd)."""
+        h = 10.0
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(1, h, 'right')
+        assert abs(tab_z0 - 0.0) < 1e-9
+        assert abs(tab_z1 - 5.0) < 1e-9
+
+    # ── bottom/top mirrors left/right ────────────────────────────────
+
+    def test_bottom_matches_left_pattern(self):
+        """'bottom' and 'left' must yield identical z extents."""
+        h = 8.0
+        for i in (0, 1, 2, 3):
+            assert _step_joint_z_extents(i, h, 'bottom') == \
+                   _step_joint_z_extents(i, h, 'left')
+
+    def test_top_matches_right_pattern(self):
+        """'top' and 'right' must yield identical z extents."""
+        h = 8.0
+        for i in (0, 1, 2, 3):
+            assert _step_joint_z_extents(i, h, 'top') == \
+                   _step_joint_z_extents(i, h, 'right')
+
+    # ── Complementary pieces interlock ───────────────────────────────
+
+    def test_adjacent_pieces_interlock_at_even_finger(self):
+        """At every even finger, left tab fills right slot and vice-versa."""
+        h = 12.0
+        for i in (0, 2, 4, 6):
+            l_tab_z0, l_tab_z1, l_slt_z0, l_slt_z1 = \
+                _step_joint_z_extents(i, h, 'left')
+            r_tab_z0, r_tab_z1, r_slt_z0, r_slt_z1 = \
+                _step_joint_z_extents(i, h, 'right')
+            # Left's tab occupies the same z-range as right's slot
+            assert abs(l_tab_z0 - r_slt_z0) < 1e-9
+            assert abs(l_tab_z1 - r_slt_z1) < 1e-9
+            # Right's tab occupies the same z-range as left's slot
+            assert abs(r_tab_z0 - l_slt_z0) < 1e-9
+            assert abs(r_tab_z1 - l_slt_z1) < 1e-9
+
+    def test_adjacent_pieces_interlock_at_odd_finger(self):
+        """At every odd finger, left tab fills right slot and vice-versa."""
+        h = 12.0
+        for i in (1, 3, 5):
+            l_tab_z0, l_tab_z1, l_slt_z0, l_slt_z1 = \
+                _step_joint_z_extents(i, h, 'left')
+            r_tab_z0, r_tab_z1, r_slt_z0, r_slt_z1 = \
+                _step_joint_z_extents(i, h, 'right')
+            assert abs(l_tab_z0 - r_slt_z0) < 1e-9
+            assert abs(l_tab_z1 - r_slt_z1) < 1e-9
+            assert abs(r_tab_z0 - l_slt_z0) < 1e-9
+            assert abs(r_tab_z1 - l_slt_z1) < 1e-9
+
+    # ── Full-height coverage: tab + slot = total height ───────────────
+
+    def test_tab_and_slot_cover_full_height(self):
+        """Tab height + slot height == part height for every finger/side."""
+        h = 15.0
+        for side in ('left', 'right', 'bottom', 'top'):
+            for i in range(6):
+                tz0, tz1, sz0, sz1 = _step_joint_z_extents(i, h, side)
+                assert abs((tz1 - tz0) + (sz1 - sz0) - h) < 1e-9
+
+    # ── Vertical locking property ─────────────────────────────────────
+
+    def test_even_finger_prevents_upward_movement(self):
+        """Even-finger left lower tab top (z=h/2) is the Z-lock surface."""
+        h = 10.0
+        _, tab_z1, _, _ = _step_joint_z_extents(0, h, 'left')
+        assert abs(tab_z1 - h * 0.5) < 1e-9   # top of lower tab = h/2
+
+    def test_odd_finger_prevents_downward_movement(self):
+        """Odd-finger left upper tab bottom (z=h/2) is the Z-lock surface."""
+        h = 10.0
+        tab_z0, _, _, _ = _step_joint_z_extents(1, h, 'left')
+        assert abs(tab_z0 - h * 0.5) < 1e-9   # bottom of upper tab = h/2
 
 
 # ===========================================================================

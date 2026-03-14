@@ -24,43 +24,55 @@ Piece slicing
   (perim_width/2 on each side of the cut) so that the interlocking finger
   joints have enough wall thickness.
 
-Finger joints
--------------
-  Box / finger joints.  At each cut face, rectangular tabs and slots
-  alternate along the face.  Complementary pieces are guaranteed to have
-  the matching inverse pattern.
+Finger joints — Stepped Shelf Style (default)
+----------------------------------------------
+  At each cut face, alternating stepped shelf joints replace the old tapered
+  box joints.  Each finger position has **both** a tab and a slot — at
+  opposite halves of the part height — so every finger simultaneously
+  provides a horizontal locking surface.
+
+  Assembly is horizontal (pieces slide together in X or Y).  The alternating
+  steps lock the assembled pieces against vertical (Z) movement:
 
       this_side = 'left'   → piece is to the LEFT  of the cut (x < cut_pos)
       this_side = 'right'  → piece is to the RIGHT of the cut (x > cut_pos)
       this_side = 'bottom' → piece is BELOW the cut            (y < cut_pos)
       this_side = 'top'    → piece is ABOVE the cut            (y > cut_pos)
 
-  'left'/'bottom' pieces carry tabs at *even* finger positions (0, 2, 4 …).
-  'right'/'top'   pieces carry tabs at *odd*  finger positions (1, 3, 5 …).
-  This guarantees adjacent pieces are exactly complementary.
+  'left'/'bottom' pieces: even fingers have LOWER tab (z=0..h/2) and an
+      upper slot (z=h/2..h) to receive the opposite piece's upper tab.
+  'left'/'bottom' pieces: odd fingers have UPPER tab (z=h/2..h) and a
+      lower slot (z=0..h/2) to receive the opposite piece's lower tab.
+  'right'/'top' pieces carry the complementary pattern.
 
-  Tab geometry
-  ~~~~~~~~~~~~
-  tab_w  = perim_width          (width of each tab/slot along the face)
-  tab_d  = perim_width / 2      (depth of each tab into the adjacent piece)
-  fit    = FIT_CLEARANCE        (bilateral assembly clearance)
+  Step geometry
+  ~~~~~~~~~~~~~
+  tab_w  = joint_w               (width of each finger along the face)
+  tab_d  = joint_w / 2           (depth of each tab into the adjacent piece)
+  fit    = FIT_CLEARANCE         (bilateral assembly clearance along the face)
+  half_h = height / 2            (Z step boundary)
 
-  Left piece tab  (x-cut):  x ∈ [cut, cut+tab_d],    y ∈ [seg_s+fit/2, seg_e-fit/2]
-  Right piece slot (x-cut): x ∈ [cut, cut+tab_d+fit], y ∈ [seg_s-fit/2, seg_e+fit/2]
+  Lower tab (even fingers on left/bottom piece):
+      Tab  (fused):  x ∈ [cut, cut+tab_d],         z ∈ [0, half_h]
+      Slot (cut):    x ∈ [cut−tab_d−fit, cut],      z ∈ [half_h, height]
+  Upper tab (odd fingers on left/bottom piece):
+      Tab  (fused):  x ∈ [cut, cut+tab_d],         z ∈ [half_h, height]
+      Slot (cut):    x ∈ [cut−tab_d−fit, cut],      z ∈ [0, half_h]
 
-  Taper (draft angle in Z)
-  ~~~~~~~~~~~~~~~~~~~~~~~~
-  Every tab and its matching slot are trapezoidal in the Z (height) direction:
+  Vertical locking
+  ~~~~~~~~~~~~~~~~
+  * Even fingers: left's lower-tab top surface (z=half_h) bears against the
+    right piece's solid body → prevents upward (+Z) movement.
+  * Odd fingers: left's upper-tab bottom surface (z=half_h) bears against
+    the right piece's solid body → prevents downward (−Z) movement.
+  * Together, every pair of adjacent fingers (one even + one odd) fully locks
+    both Z directions.  A minimum of two fingers per face is recommended.
 
-      depth at z = 0       (bottom) = tab_d × (1 – TAPER_RATIO)   ← narrower
-      depth at z = height  (top)    = tab_d × (1 + TAPER_RATIO)   ← wider
-
-  The wider-at-top / narrower-at-bottom profile means:
-
-  * Pieces are assembled by pushing them together horizontally (in X or Y).
-  * Once engaged, the tapered faces contact at the bottom (z = 0), providing
-    a positive vertical support reference — the joint cannot rack downward.
-  * The draft angle also acts as a self-aligning guide during assembly.
+  Legacy tapered joints
+  ~~~~~~~~~~~~~~~~~~~~~
+  The original taper-draft box joint (TAPER_RATIO = 0.20) is still available
+  via ``joint_style='taper'`` in :func:`make_piece`.  The TAPER_RATIO
+  constant is retained for backward compatibility.
 """
 
 import math
@@ -1619,6 +1631,155 @@ def finger_joint(
 
 
 # ---------------------------------------------------------------------------
+# Stepped shelf joint (new default)
+# ---------------------------------------------------------------------------
+
+def _step_joint_z_extents(
+    finger_idx: int,
+    height: float,
+    this_side: str,
+) -> tuple:
+    """Return ``(tab_z0, tab_z1, slot_z0, slot_z1)`` for a step-joint finger.
+
+    Pure helper — no FreeCAD dependency, fully unit-testable.
+
+    The step boundary is at ``height / 2``.  'left'/'bottom' pieces start
+    with a lower tab (z = 0 … h/2) at even finger indices; 'right'/'top'
+    pieces have the complementary pattern.
+
+    Parameters
+    ----------
+    finger_idx : 0-based finger index along the cut face
+    height     : total part height (Z dimension)
+    this_side  : 'left' | 'right' | 'bottom' | 'top'
+    """
+    half_h = height * 0.5
+    first_is_lower   = this_side in ('left', 'bottom')
+    tab_at_lower_half = (finger_idx % 2 == 0) == first_is_lower
+    if tab_at_lower_half:
+        return 0.0, half_h, half_h, height
+    else:
+        return half_h, height, 0.0, half_h
+
+
+def step_joint(
+    axis: str,
+    cut_pos: float,
+    face_start: float,
+    face_end: float,
+    height: float,
+    tab_w: float,
+    tab_d: float,
+    this_side: str,
+    joint_span: float = 0.0,
+) -> tuple:
+    """Return (tabs, slots) lists of Part.Shape objects for a stepped shelf joint.
+
+    Unlike the tapered box joint (which makes each finger *either* a tab *or*
+    a slot), every finger here has **both** a half-height tab **and** a
+    half-height slot at the complementary Z level.  The alternating step
+    pattern locks assembled pieces against vertical (Z) movement while still
+    allowing horizontal (X or Y) assembly.
+
+    Parameters
+    ----------
+    axis       : 'x' or 'y' — axis *perpendicular* to the cut face
+    cut_pos    : coordinate of the cut plane along *axis*
+    face_start : start of the face range in the *parallel* axis
+    face_end   : end   of the face range in the *parallel* axis
+    height     : Z height of the part
+    tab_w      : finger width (along the face)
+    tab_d      : finger depth (into the adjacent piece)
+    this_side  : 'left'|'right' for x-cuts; 'bottom'|'top' for y-cuts
+    joint_span : active length of the finger-joint zone along the face (mm).
+                 ``0`` (default) spans the full face.  When positive and
+                 smaller than the face length, equal solid margins are left on
+                 both sides — centred on the face.
+
+    Returns
+    -------
+    (tabs, slots)
+        *tabs*  – shapes to be **fused** onto the piece body (protruding steps)
+        *slots* – shapes to be **cut** from the piece body (receiving notches)
+    """
+    import Part
+    import FreeCAD as App
+
+    fit    = FIT_CLEARANCE
+    tabs   = []
+    slots  = []
+
+    loop_start, loop_end = _centered_joint_range(face_start, face_end, joint_span)
+
+    finger_idx = 0
+    pos        = loop_start
+
+    while pos < loop_end - 1e-6:
+        seg_s = pos
+        seg_e = min(pos + tab_w, loop_end)
+        seg_l = seg_e - seg_s
+
+        if seg_l < tab_w * MIN_SEG_RATIO:
+            break
+
+        # Z extents for this finger (tab half and slot half)
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(
+            finger_idx, height, this_side
+        )
+
+        # Along-face extents: tab (tight) and slot (loose)
+        face_t_s = seg_s + fit * 0.5       # tab face start
+        face_t_l = seg_l - fit             # tab face length
+        face_s_s = seg_s - fit * 0.5       # slot face start
+        face_s_l = seg_l + fit             # slot face length
+
+        if axis == 'x':
+            if this_side == 'left':
+                # Tab protrudes in +X; slot receives right's tab (extends in −X)
+                tx0, tx1 = cut_pos, cut_pos + tab_d
+                sx0, sx1 = cut_pos - tab_d - fit, cut_pos
+            else:  # 'right'
+                # Tab protrudes in −X; slot receives left's tab (extends in +X)
+                tx0, tx1 = cut_pos - tab_d, cut_pos
+                sx0, sx1 = cut_pos, cut_pos + tab_d + fit
+
+            if face_t_l > _GEOM_EPS and tab_z1 - tab_z0 > _GEOM_EPS:
+                tabs.append(Part.makeBox(
+                    tx1 - tx0, face_t_l, tab_z1 - tab_z0,
+                    App.Vector(tx0, face_t_s, tab_z0)))
+
+            if face_s_l > _GEOM_EPS and slt_z1 - slt_z0 > _GEOM_EPS:
+                slots.append(Part.makeBox(
+                    sx1 - sx0, face_s_l, slt_z1 - slt_z0,
+                    App.Vector(sx0, face_s_s, slt_z0)))
+
+        else:  # axis == 'y'
+            if this_side == 'bottom':
+                # Tab protrudes in +Y; slot receives top's tab (extends in −Y)
+                ty0, ty1 = cut_pos, cut_pos + tab_d
+                sy0, sy1 = cut_pos - tab_d - fit, cut_pos
+            else:  # 'top'
+                # Tab protrudes in −Y; slot receives bottom's tab (extends in +Y)
+                ty0, ty1 = cut_pos - tab_d, cut_pos
+                sy0, sy1 = cut_pos, cut_pos + tab_d + fit
+
+            if face_t_l > _GEOM_EPS and tab_z1 - tab_z0 > _GEOM_EPS:
+                tabs.append(Part.makeBox(
+                    face_t_l, ty1 - ty0, tab_z1 - tab_z0,
+                    App.Vector(face_t_s, ty0, tab_z0)))
+
+            if face_s_l > _GEOM_EPS and slt_z1 - slt_z0 > _GEOM_EPS:
+                slots.append(Part.makeBox(
+                    face_s_l, sy1 - sy0, slt_z1 - slt_z0,
+                    App.Vector(face_s_s, sy0, slt_z0)))
+
+        pos        += tab_w
+        finger_idx += 1
+
+    return tabs, slots
+
+
+# ---------------------------------------------------------------------------
 # Single-piece builder
 # ---------------------------------------------------------------------------
 
@@ -1743,6 +1904,7 @@ def make_piece(
     support_spacing: float = 0.0,
     support_width: float = None,
     joint_depth: float = None,
+    joint_style: str = "step",
 ) -> object:  # returns Part.Shape
     """Build one interlocking piece of the lattice panel.
 
@@ -1794,17 +1956,10 @@ def make_piece(
                      Defaults to *joint_w* when not specified.
     joint_depth    : how far each finger tab penetrates into the adjacent
                      piece in the direction perpendicular to the cut face (mm).
-                     This is the *nominal* depth at mid-height; the actual depth
-                     is tapered ±``TAPER_RATIO`` over the Z range.
-
-                     Defaults to ``None`` → ``joint_w * 0.5`` (the bridge
-                     half-width, as before), meaning tabs fill the full half of
-                     the bridge band.  When set to a smaller positive value the
-                     tabs are shallower: a solid base remains beyond the tab
-                     tips in the receiving piece's bridge band, forming a
-                     **continuous support bar** across the cut line.  The bridge
-                     band width itself is unchanged; only the tab/slot depth is
-                     reduced.
+                     Defaults to ``None`` → ``joint_w * 0.5``.
+    joint_style    : ``'step'`` (default) — alternating stepped shelf joints
+                     that lock assembled pieces against vertical movement.
+                     ``'taper'`` — legacy tapered box joints (draft angle in Z).
     """
     import FreeCAD as App
     import Part
@@ -1888,34 +2043,36 @@ def make_piece(
         body = body.fuse(excl_union)
 
     # ------------------------------------------------------------------
-    # 4. Finger joints on each cut face
+    # 4. Joints on each cut face
     # ------------------------------------------------------------------
+    _joint_fn = step_joint if joint_style == 'step' else finger_joint
+
     # ── Left face (x = x0): this piece is to the RIGHT of that cut
     if x0 > 1e-6:
-        tabs, slots = finger_joint('x', x0, y0, y1,
-                                   height, tab_w, tab_d, 'right',
-                                   joint_span=joint_length)
+        tabs, slots = _joint_fn('x', x0, y0, y1,
+                                height, tab_w, tab_d, 'right',
+                                joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Right face (x = x1): this piece is to the LEFT of that cut
     if x1 < total_w - 1e-6:
-        tabs, slots = finger_joint('x', x1, y0, y1,
-                                   height, tab_w, tab_d, 'left',
-                                   joint_span=joint_length)
+        tabs, slots = _joint_fn('x', x1, y0, y1,
+                                height, tab_w, tab_d, 'left',
+                                joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Bottom face (y = y0): this piece is ABOVE (top side of) that cut
     if y0 > 1e-6:
-        tabs, slots = finger_joint('y', y0, x0, x1,
-                                   height, tab_w, tab_d, 'top',
-                                   joint_span=joint_length)
+        tabs, slots = _joint_fn('y', y0, x0, x1,
+                                height, tab_w, tab_d, 'top',
+                                joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Top face (y = y1): this piece is BELOW (bottom side of) that cut
     if y1 < total_l - 1e-6:
-        tabs, slots = finger_joint('y', y1, x0, x1,
-                                   height, tab_w, tab_d, 'bottom',
-                                   joint_span=joint_length)
+        tabs, slots = _joint_fn('y', y1, x0, x1,
+                                height, tab_w, tab_d, 'bottom',
+                                joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     return body
@@ -2075,6 +2232,7 @@ def create_all_pieces(
     support_spacing: float = 0.0,
     support_width: float = None,
     joint_depth: float = None,
+    joint_style: str = "step",
 ) -> list:
     """Create all interlocking pieces for a lattice flat panel.
 
@@ -2104,8 +2262,8 @@ def create_all_pieces(
                             Defaults to *joint_width*.
     joint_depth           : how far each finger tab penetrates into the adjacent
                             piece (mm).  ``None`` → ``joint_width * 0.5``.
-                            Smaller values leave a solid base in the bridge band
-                            (a continuous support bar across the cut line).
+    joint_style           : ``'step'`` (default) — alternating stepped shelf
+                            joints.  ``'taper'`` — legacy tapered box joints.
 
     Returns
     -------
@@ -2138,6 +2296,7 @@ def create_all_pieces(
                 support_spacing=support_spacing,
                 support_width=support_width,
                 joint_depth=joint_depth,
+                joint_style=joint_style,
             )
             pieces.append((f"Piece_{ix}_{iy}", shape))
 
@@ -2160,6 +2319,7 @@ def create_shelf_with_legs(
     support_spacing: float = 0.0,
     support_width: float = None,
     joint_depth: float = None,
+    joint_style: str = "step",
 ) -> list:
     """Create all interlocking shelf pieces plus four individual corner legs.
 
@@ -2206,8 +2366,8 @@ def create_shelf_with_legs(
                             Defaults to *joint_width*.
     joint_depth           : how far each finger tab penetrates into the adjacent
                             piece (mm).  ``None`` → ``joint_width * 0.5``.
-                            Smaller values leave a solid base in the bridge band
-                            (a continuous support bar across the cut line).
+    joint_style           : ``'step'`` (default) — alternating stepped shelf
+                            joints.  ``'taper'`` — legacy tapered box joints.
 
     Returns
     -------
@@ -2303,6 +2463,7 @@ def create_shelf_with_legs(
                 support_spacing=support_spacing,
                 support_width=support_width,
                 joint_depth=joint_depth,
+                joint_style=joint_style,
             )
 
             # Cut blind sockets and round through-holes that intersect this piece
