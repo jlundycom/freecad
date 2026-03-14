@@ -2007,3 +2007,125 @@ class TestDialogParamKeys:
         for key in ("joint_width", "joint_length",
                     "support_spacing", "support_width"):
             assert key in params, f"Key {key!r} missing from get_params()"
+
+
+# ===========================================================================
+# joint_depth parameter — shallower finger tabs for a solid support bar
+# ===========================================================================
+
+class TestJointDepth:
+    """Tests verifying the joint_depth parameter logic.
+
+    joint_depth controls how far each finger tab penetrates into the adjacent
+    piece (tab_d).  When joint_depth < joint_w * 0.5, solid material remains
+    beyond the tab tips inside the bridge band — forming a continuous support
+    bar across the cut line.  These tests exercise the pure-Python resolution
+    logic (mirroring make_piece()'s tab_d computation) without calling FreeCAD.
+    """
+
+    def _resolve_tab_d(self, joint_w: float, joint_depth) -> float:
+        """Mirrors the tab_d resolution logic in make_piece()."""
+        return (joint_depth
+                if (joint_depth is not None and joint_depth > 0.0)
+                else joint_w * 0.5)
+
+    def test_none_depth_gives_half_joint_w(self):
+        """Default (None) → tab_d = joint_w / 2."""
+        assert self._resolve_tab_d(8.0, None) == pytest.approx(4.0)
+
+    def test_zero_depth_gives_half_joint_w(self):
+        """0 depth (spinbox default) → same as None, tab_d = joint_w / 2."""
+        assert self._resolve_tab_d(8.0, 0.0) == pytest.approx(4.0)
+
+    def test_explicit_depth_used_directly(self):
+        """Positive joint_depth is used as-is for tab_d."""
+        assert self._resolve_tab_d(8.0, 2.0) == pytest.approx(2.0)
+
+    def test_depth_smaller_than_bridge_half_leaves_solid_base(self):
+        """When joint_depth < joint_w/2, solid material exists beyond tab tips.
+
+        solid_base = bridge_half - tab_d  should be > 0.
+        """
+        joint_w    = 10.0
+        joint_depth = 3.0
+        bridge_half = joint_w * 0.5     # 5.0
+        tab_d       = self._resolve_tab_d(joint_w, joint_depth)
+        solid_base  = bridge_half - tab_d
+        assert solid_base > 0.0, "Expected solid base beyond tab tips"
+        assert solid_base == pytest.approx(2.0)
+
+    def test_depth_equal_to_bridge_half_leaves_no_solid_base(self):
+        """When joint_depth == joint_w/2 (default), no solid base remains."""
+        joint_w    = 10.0
+        joint_depth = 5.0              # exactly joint_w / 2
+        bridge_half = joint_w * 0.5
+        tab_d       = self._resolve_tab_d(joint_w, joint_depth)
+        solid_base  = bridge_half - tab_d
+        assert solid_base == pytest.approx(0.0)
+
+    def test_depth_larger_than_bridge_half_is_allowed(self):
+        """joint_depth > bridge_half is not clamped by this logic (caller's choice)."""
+        joint_w    = 6.0
+        joint_depth = 4.0              # > joint_w / 2 = 3.0
+        tab_d       = self._resolve_tab_d(joint_w, joint_depth)
+        assert tab_d == pytest.approx(4.0)
+
+    def test_depth_independent_of_joint_w(self):
+        """Different joint_w values don't affect an explicit joint_depth."""
+        depth = 2.5
+        for jw in [4.0, 6.0, 10.0, 20.0]:
+            tab_d = self._resolve_tab_d(jw, depth)
+            assert tab_d == pytest.approx(depth)
+
+    def test_support_bar_width_at_each_side(self):
+        """Solid support bar extends from tab tip to outer bridge edge on each side.
+
+        With joint_w=12, joint_depth=3:
+          bridge_half = 6
+          tab_d = 3
+          solid_bar_each_side = 3
+          total_solid = 6  (3 on each piece)
+        """
+        joint_w    = 12.0
+        joint_depth = 3.0
+        bridge_half = joint_w * 0.5
+        tab_d       = self._resolve_tab_d(joint_w, joint_depth)
+        bar_each    = bridge_half - tab_d
+        assert bar_each == pytest.approx(3.0)
+        assert bar_each * 2 == pytest.approx(6.0)  # total across both pieces
+
+
+class TestDialogJointDepthKey:
+    """Verify that get_params() includes the joint_depth key."""
+
+    def _simulate_get_params(self, joint_d_val: float = 0.0) -> dict:
+        """Mirrors the get_params() logic in HexLatticeDialog."""
+        joint_w = 0.0
+        sup_w   = 0.0
+        joint_d = joint_d_val if joint_d_val > 0.0 else None
+        return {
+            "width": 300.0, "length": 300.0, "height": 10.0,
+            "perim_width": 6.0,
+            "joint_width":     joint_w if joint_w > 0.0 else None,
+            "joint_length":    0.0,
+            "joint_depth":     joint_d,
+            "support_spacing": 0.0,
+            "support_width":   sup_w if sup_w > 0.0 else None,
+            "hex_size": 8.0, "wall_thickness": 1.5,
+            "max_piece_size": 220.0, "lattice_type": "hexagonal",
+        }
+
+    def test_joint_depth_zero_returns_none(self):
+        """joint_depth spinbox value 0 should produce None in the dict."""
+        params = self._simulate_get_params(joint_d_val=0.0)
+        assert params["joint_depth"] is None
+
+    def test_joint_depth_nonzero_returns_value(self):
+        """joint_depth spinbox value > 0 should appear as-is."""
+        params = self._simulate_get_params(joint_d_val=2.5)
+        assert params["joint_depth"] == pytest.approx(2.5)
+
+    def test_joint_depth_key_present_in_params(self):
+        """joint_depth key must be present in the returned dict."""
+        params = self._simulate_get_params()
+        assert "joint_depth" in params

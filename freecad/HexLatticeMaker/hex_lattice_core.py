@@ -1510,6 +1510,7 @@ def make_piece(
     joint_length: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
+    joint_depth: float = None,
 ) -> object:  # returns Part.Shape
     """Build one interlocking piece of the lattice panel.
 
@@ -1546,7 +1547,7 @@ def make_piece(
                      (default ``"hexagonal"``).
     joint_w        : **inner** joint / bridge width (mm).  Controls the bridge
                      band half-width at cut lines and the finger-joint tab
-                     geometry (``tab_w = joint_w``, ``tab_d = joint_w * 0.5``).
+                     width (``tab_w = joint_w``).
                      Defaults to *perim_w* for backward compatibility.
     joint_length   : active length of the finger-joint zone on each cut face
                      (mm).  ``0`` (default) spans the full face so all existing
@@ -1559,6 +1560,19 @@ def make_piece(
                      intervals in both X and Y, creating a structural grid.
     support_width  : full width of each interior support bar (mm).
                      Defaults to *joint_w* when not specified.
+    joint_depth    : how far each finger tab penetrates into the adjacent
+                     piece in the direction perpendicular to the cut face (mm).
+                     This is the *nominal* depth at mid-height; the actual depth
+                     is tapered ±``TAPER_RATIO`` over the Z range.
+
+                     Defaults to ``None`` → ``joint_w * 0.5`` (the bridge
+                     half-width, as before), meaning tabs fill the full half of
+                     the bridge band.  When set to a smaller positive value the
+                     tabs are shallower: a solid base remains beyond the tab
+                     tips in the receiving piece's bridge band, forming a
+                     **continuous support bar** across the cut line.  The bridge
+                     band width itself is unchanged; only the tab/slot depth is
+                     reduced.
     """
     import FreeCAD as App
     import Part
@@ -1569,7 +1583,8 @@ def make_piece(
         support_width = joint_w
 
     tab_w  = joint_w
-    tab_d  = joint_w * 0.5
+    tab_d  = (joint_depth if (joint_depth is not None and joint_depth > 0.0)
+              else joint_w * 0.5)
 
     # ------------------------------------------------------------------
     # 1. Base rectangular body
@@ -1827,6 +1842,7 @@ def create_all_pieces(
     joint_length: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
+    joint_depth: float = None,
 ) -> list:
     """Create all interlocking pieces for a lattice flat panel.
 
@@ -1847,13 +1863,17 @@ def create_all_pieces(
                             (default ``"hexagonal"``).
     joint_width           : **inner** joint / bridge width (mm).  Controls the
                             bridge-band width at cut lines and the finger-joint
-                            tab geometry.  Defaults to *perim_width*.
+                            tab width.  Defaults to *perim_width*.
     joint_length          : active length of the finger-joint zone per cut face
                             (mm).  ``0`` (default) spans the full face.
     support_spacing       : spacing between interior support bars (mm).
                             ``0`` (default) disables support bars.
     support_width         : full width of each interior support bar (mm).
                             Defaults to *joint_width*.
+    joint_depth           : how far each finger tab penetrates into the adjacent
+                            piece (mm).  ``None`` → ``joint_width * 0.5``.
+                            Smaller values leave a solid base in the bridge band
+                            (a continuous support bar across the cut line).
 
     Returns
     -------
@@ -1885,6 +1905,7 @@ def create_all_pieces(
                 joint_length=joint_length,
                 support_spacing=support_spacing,
                 support_width=support_width,
+                joint_depth=joint_depth,
             )
             pieces.append((f"Piece_{ix}_{iy}", shape))
 
@@ -1906,6 +1927,7 @@ def create_shelf_with_legs(
     joint_length: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
+    joint_depth: float = None,
 ) -> list:
     """Create all interlocking shelf pieces plus four individual corner legs.
 
@@ -1943,13 +1965,17 @@ def create_shelf_with_legs(
                             (default ``"hexagonal"``).
     joint_width           : **inner** joint / bridge width (mm).  Controls the
                             bridge-band width at cut lines and the finger-joint
-                            tab geometry.  Defaults to *perim_width*.
+                            tab width.  Defaults to *perim_width*.
     joint_length          : active length of the finger-joint zone per cut face
                             (mm).  ``0`` (default) spans the full face.
     support_spacing       : spacing between interior support bars (mm).
                             ``0`` (default) disables support bars.
     support_width         : full width of each interior support bar (mm).
                             Defaults to *joint_width*.
+    joint_depth           : how far each finger tab penetrates into the adjacent
+                            piece (mm).  ``None`` → ``joint_width * 0.5``.
+                            Smaller values leave a solid base in the bridge band
+                            (a continuous support bar across the cut line).
 
     Returns
     -------
@@ -2044,6 +2070,7 @@ def create_shelf_with_legs(
                 joint_length=joint_length,
                 support_spacing=support_spacing,
                 support_width=support_width,
+                joint_depth=joint_depth,
             )
 
             # Cut blind sockets and round through-holes that intersect this piece
