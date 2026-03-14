@@ -479,6 +479,13 @@ class SnubSquareTilingProvider(TilingProvider):
     accumulated drift is ``n_rows·step/2``.  In column units this is
     ``n_rows / (2+√3)``, so the column range is extended on the right by
     ``extra_cols = ⌈n_rows / (2+√3)⌉ + 2`` to ensure full coverage.
+
+    Symmetrically, the ``a1`` vector has a positive y-component (``+step/2``),
+    introducing an upward y-drift of ``step/2`` per column.  Large column
+    indices therefore require negative row indices to still place polygon
+    centres in the lower part of the region.  The row loop starts at
+    ``-1 - extra_rows_neg`` where
+    ``extra_rows_neg = ⌈n_cols / (2+√3)⌉ + 2``.
     """
 
     display_name = "Snub Square (3.3.4.3.4)"
@@ -523,13 +530,20 @@ class SnubSquareTilingProvider(TilingProvider):
         n_rows = int((gy1 - gy0) / a2y) + 3
         n_cols = int((gx1 - gx0) / a1x) + 3
 
-        # a2x < 0: leftward drift accumulates as row increases.  Over n_rows
+        # a2x < 0: leftward x-drift accumulates as row increases.  Over n_rows
         # rows the total drift is n_rows·|a2x| = n_rows·step/2.  In column
         # units (a1x per column) that is n_rows/(2+√3).  Extend the column
         # range on the right by extra_cols so no cell is missed.
         extra_cols = int(math.ceil(n_rows / (2.0 + sq3))) + 2
 
-        for row in range(-1, n_rows + 1):
+        # a1y > 0: upward y-drift accumulates as col increases.  Over n_cols
+        # columns the total drift is n_cols·a1y = n_cols·step/2.  In row
+        # units (a2y per row) that is n_cols/(2+√3).  Extend the row range
+        # downward by extra_rows_neg so the bottom-right of the region is
+        # fully covered regardless of width.
+        extra_rows_neg = int(math.ceil(n_cols / (2.0 + sq3))) + 2
+
+        for row in range(-1 - extra_rows_neg, n_rows + 1):
             for col in range(-1, n_cols + 1 + extra_cols):
                 lx = gx0 + col * a1x + row * a2x
                 ly = gy0 + col * a1y + row * a2y

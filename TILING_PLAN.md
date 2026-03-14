@@ -80,6 +80,7 @@ due to the oblique coordinate system.
 | `triangular` | Triangular (3.3.3.3.3.3) | `{3}` | Equilateral triangle (up + down) |
 | `trihexagonal` | Trihexagonal (3.6.3.6) | `r{6}` | Equilateral triangle + regular hexagon |
 | `truncated_square` | Truncated Square (4.8.8) | `t{4}` | Regular square + regular octagon |
+| `snub_square` | Snub Square (3.3.4.3.4) | `s{4}` | Regular square + equilateral triangle |
 
 ---
 
@@ -108,14 +109,15 @@ edge length; octagons use rotation 22.5°, squares use rotation 45°.
 
 ---
 
-### Snub Square (3.3.4.3.4)  — symbol `s{4}`
+### ~~Snub Square (3.3.4.3.4)~~ — **DONE** (key `snub_square`)
 
-Squares surrounded by groups of triangles.
-
-* **Lattice**: oblique (chiral), derived from `step`.
-* **Basis**: 1 square + 4 triangles per unit cell.
-* Note: this tiling is *chiral* — left- and right-handed variants exist.
-  A practical implementation may choose one chirality (e.g. clockwise).
+Implemented in `SnubSquareTilingProvider`.  Oblique square Bravais lattice
+with `a1 = step·((2+√3)/2, 1/2)`, `a2 = step·(-1/2, (2+√3)/2)`.  Six
+polygons per cell: S0 at `(0,0)` rot=45°, S1 at `(step·(1+√3)/4,
+step·(3+√3)/4)` rot=75°, plus four triangles at rotations 0°/30°/60°/90°.
+Row loop starts at `-1 - extra_rows_neg` (symmetric to `extra_cols`) to
+cover the bottom-right of wide regions where upward y-drift from `a1y > 0`
+would otherwise miss cells.
 
 ---
 
