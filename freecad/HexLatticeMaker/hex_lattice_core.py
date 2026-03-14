@@ -1200,6 +1200,38 @@ def _make_tapered_prism_y(
 
 
 # ---------------------------------------------------------------------------
+# Finger-joint helpers
+# ---------------------------------------------------------------------------
+
+def _centered_joint_range(
+    face_start: float,
+    face_end: float,
+    joint_span: float,
+) -> tuple:
+    """Return ``(loop_start, loop_end)`` for a finger-joint zone centred in a face.
+
+    When *joint_span* is ``0`` or ≥ the face length, the full face
+    ``(face_start, face_end)`` is returned unchanged.  When *joint_span* is
+    positive and smaller than the face length, equal solid margins are left on
+    both sides so that the finger-joint region is centred on the face.
+
+    This is a pure helper (no FreeCAD dependency) so it can be unit-tested
+    independently of the geometry builders.
+
+    Parameters
+    ----------
+    face_start, face_end : extent of the cut face in the parallel axis (mm)
+    joint_span           : desired active length of the finger-joint zone (mm).
+                           ``0`` means "use the entire face".
+    """
+    face_len = face_end - face_start
+    if joint_span <= 0.0 or joint_span >= face_len - _GEOM_EPS:
+        return face_start, face_end
+    margin = (face_len - joint_span) * 0.5
+    return face_start + margin, face_end - margin
+
+
+# ---------------------------------------------------------------------------
 # Finger-joint builder
 # ---------------------------------------------------------------------------
 
@@ -1212,6 +1244,7 @@ def finger_joint(
     tab_w: float,
     tab_d: float,
     this_side: str,
+    joint_span: float = 0.0,
 ) -> tuple:
     """Return (tabs, slots) lists of Part.Shape objects for one cut face.
 
@@ -1228,6 +1261,10 @@ def finger_joint(
                  ``tab_d * (1 - TAPER_RATIO)`` at z = 0 (narrow / bottom),
                  ``tab_d * (1 + TAPER_RATIO)`` at z = height (wide / top).
     this_side  : 'left'|'right' for x-cuts; 'bottom'|'top' for y-cuts
+    joint_span : active length of the finger-joint zone along the face (mm).
+                 ``0`` (default) spans the full face.  When positive and
+                 smaller than the face length, equal solid margins are left on
+                 both sides — the finger-joint region is centred on the face.
     """
     import FreeCAD as App  # noqa: F401 – kept for completeness; used by helpers
     import Part             # noqa: F401
@@ -1245,12 +1282,17 @@ def finger_joint(
     # 'left'/'bottom' pieces: tabs at even finger positions (0, 2, 4 …)
     first_is_tab = this_side in ('left', 'bottom')
 
-    finger_idx = 0
-    pos        = face_start
+    # Determine the active span of the joint on this face.  When joint_span > 0
+    # and smaller than the face length, the fingers are centred on the face and
+    # equal solid margins are left on each side for additional bearing strength.
+    loop_start, loop_end = _centered_joint_range(face_start, face_end, joint_span)
 
-    while pos < face_end - 1e-6:
+    finger_idx = 0
+    pos        = loop_start
+
+    while pos < loop_end - 1e-6:
         seg_s = pos
-        seg_e = min(pos + tab_w, face_end)
+        seg_e = min(pos + tab_w, loop_end)
         seg_l = seg_e - seg_s
 
         # Drop very short end segments (less than MIN_SEG_RATIO × tab_w)
@@ -1357,6 +1399,9 @@ def _build_exclusion_solids(
     x_cuts: list,
     y_cuts: list,
     leg_zones: list,
+    joint_w: float = None,
+    support_spacing: float = 0.0,
+    support_width: float = 0.0,
 ) -> list:
     """Return a list of FreeCAD ``Part.Shape`` boxes for all exclusion zones
     that overlap the piece region ``[piece_x0, piece_x1] × [piece_y0, piece_y1]``.
@@ -1365,9 +1410,12 @@ def _build_exclusion_solids(
 
     * **Perimeter frame** — four strips of width *perim_w* along every outer
       edge of the shelf (bottom, top, left, right).
-    * **Cut bridges** — a band of half-width *perim_w / 2* on each side of
+    * **Cut bridges** — a band of half-width *joint_w / 2* on each side of
       every X-cut and Y-cut line, keeping the finger-joint bridge material
-      intact.
+      intact.  When *joint_w* is not supplied it defaults to *perim_w*.
+    * **Interior support bars** — when *support_spacing* > 0, solid bars of
+      width *support_width* run in both X and Y directions at intervals of
+      *support_spacing* mm, forming a structural grid within the tiling.
     * **Leg support rectangles** — the full footprint of each leg corner
       supplied via *leg_zones*.
 
@@ -1376,9 +1424,23 @@ def _build_exclusion_solids(
     boxes back into the piece body (after cutting the full tiling holes) to
     produce cleanly truncated polygon holes at zone boundaries instead of
     entirely suppressing cells whose centres fall inside a zone.
+
+    Parameters
+    ----------
+    joint_w         : bridge-band half-width used at cut lines (mm).
+                      Defaults to *perim_w* when not specified.
+    support_spacing : spacing between interior support bars (mm).
+                      ``0`` (default) disables support bars entirely.
+    support_width   : full width of each interior support bar (mm).
+                      Defaults to *joint_w* when not specified.
     """
     import FreeCAD as App
     import Part
+
+    if joint_w is None:
+        joint_w = perim_w
+    if support_width <= 0.0:
+        support_width = joint_w
 
     solids = []
 
@@ -1404,11 +1466,25 @@ def _build_exclusion_solids(
         _clip_and_add(*strip)
 
     # ── Bridge bands at cut lines ─────────────────────────────────────────
-    bridge_half = perim_w * 0.5
+    bridge_half = joint_w * 0.5
     for xc in x_cuts:
         _clip_and_add(xc - bridge_half, xc + bridge_half, 0.0, total_l)
     for yc in y_cuts:
         _clip_and_add(0.0, total_w, yc - bridge_half, yc + bridge_half)
+
+    # ── Interior support bars ─────────────────────────────────────────────
+    if support_spacing > _GEOM_EPS:
+        bar_half = support_width * 0.5
+        # Y-direction bars (parallel to Y axis; vertical bars across the width)
+        bar_x = support_spacing
+        while bar_x < total_w - _GEOM_EPS:
+            _clip_and_add(bar_x - bar_half, bar_x + bar_half, 0.0, total_l)
+            bar_x += support_spacing
+        # X-direction bars (parallel to X axis; horizontal bars across the length)
+        bar_y = support_spacing
+        while bar_y < total_l - _GEOM_EPS:
+            _clip_and_add(0.0, total_w, bar_y - bar_half, bar_y + bar_half)
+            bar_y += support_spacing
 
     # ── Leg support rectangles ────────────────────────────────────────────
     for lx0, ly0, lx1, ly1 in leg_zones:
@@ -1430,6 +1506,10 @@ def make_piece(
     y_cuts: list,
     leg_zones: list = (),
     lattice_type: str = "hexagonal",
+    joint_w: float = None,
+    joint_length: float = 0.0,
+    support_spacing: float = 0.0,
+    support_width: float = None,
 ) -> object:  # returns Part.Shape
     """Build one interlocking piece of the lattice panel.
 
@@ -1440,36 +1520,56 @@ def make_piece(
     cut bridges, leg zones).  All polygon holes are cut into the base body
     first so that the tiling is perfectly regular across the entire surface.
 
-    Exclusion zones (perimeter frame, cut bridges, leg rectangles) are then
-    **fused back** as solid geometry on top of the tiled body.  Any polygon
-    hole that overlaps an exclusion zone is cleanly *truncated* at the zone
-    boundary rather than being omitted entirely.  This produces a more
-    uniform, regular appearance at the edges and around leg corners.
+    Exclusion zones (perimeter frame, cut bridges, leg rectangles, optional
+    support bars) are then **fused back** as solid geometry on top of the
+    tiled body.  Any polygon hole that overlaps an exclusion zone is cleanly
+    *truncated* at the zone boundary rather than being omitted entirely.
 
     Parameters
     ----------
-    ix, iy       : piece grid indices (used for naming; not needed for geometry)
-    x0 … y1      : nominal piece bounds (at cut lines)
-    total_w/l    : full-part dimensions
-    height       : part thickness (Z)
-    perim_w      : solid perimeter width and finger-joint bridge thickness
-    hex_size     : cell side length (mm).  Named ``hex_size`` for backward
-                   compatibility; for non-hexagonal tilings this is the side
-                   length of the cell polygon.
-    wall_t       : minimum wall thickness between adjacent cells
-    x_cuts       : list of X-cut positions
-    y_cuts       : list of Y-cut positions
-    leg_zones    : list of ``(x0, y0, x1, y1)`` rectangles that must remain
-                   solid (e.g. leg-corner footprints).  The full footprint is
-                   restored after hole cutting via a boolean fuse.
-    lattice_type : one of the keys in :data:`LATTICE_TYPES`
-                   (default ``"hexagonal"``).
+    ix, iy         : piece grid indices (used for naming; not needed for geometry)
+    x0 … y1        : nominal piece bounds (at cut lines)
+    total_w/l      : full-part dimensions
+    height         : part thickness (Z)
+    perim_w        : solid **outer** perimeter width (mm).  Controls the four
+                     frame strips at the shelf edges.
+    hex_size       : cell side length (mm).  Named ``hex_size`` for backward
+                     compatibility; for non-hexagonal tilings this is the side
+                     length of the cell polygon.
+    wall_t         : minimum wall thickness between adjacent cells
+    x_cuts         : list of X-cut positions
+    y_cuts         : list of Y-cut positions
+    leg_zones      : list of ``(x0, y0, x1, y1)`` rectangles that must remain
+                     solid (e.g. leg-corner footprints).  The full footprint is
+                     restored after hole cutting via a boolean fuse.
+    lattice_type   : one of the keys in :data:`LATTICE_TYPES`
+                     (default ``"hexagonal"``).
+    joint_w        : **inner** joint / bridge width (mm).  Controls the bridge
+                     band half-width at cut lines and the finger-joint tab
+                     geometry (``tab_w = joint_w``, ``tab_d = joint_w * 0.5``).
+                     Defaults to *perim_w* for backward compatibility.
+    joint_length   : active length of the finger-joint zone on each cut face
+                     (mm).  ``0`` (default) spans the full face so all existing
+                     behaviour is preserved.  When > 0 and smaller than the
+                     face dimension, equal solid margins are left on both ends,
+                     centring the finger joints on the face.
+    support_spacing: spacing between interior support bars (mm).
+                     ``0`` (default) disables support bars entirely.  When > 0,
+                     solid bars of width *support_width* are fused at regular
+                     intervals in both X and Y, creating a structural grid.
+    support_width  : full width of each interior support bar (mm).
+                     Defaults to *joint_w* when not specified.
     """
     import FreeCAD as App
     import Part
 
-    tab_w  = perim_w
-    tab_d  = perim_w * 0.5
+    if joint_w is None:
+        joint_w = perim_w
+    if support_width is None:
+        support_width = joint_w
+
+    tab_w  = joint_w
+    tab_d  = joint_w * 0.5
 
     # ------------------------------------------------------------------
     # 1. Base rectangular body
@@ -1532,6 +1632,9 @@ def make_piece(
         perim_w,
         x_cuts, y_cuts,
         leg_zones,
+        joint_w=joint_w,
+        support_spacing=support_spacing,
+        support_width=support_width,
     )
     if excl_solids:
         excl_union = _fuse_shapes(excl_solids)
@@ -1543,25 +1646,29 @@ def make_piece(
     # ── Left face (x = x0): this piece is to the RIGHT of that cut
     if x0 > 1e-6:
         tabs, slots = finger_joint('x', x0, y0, y1,
-                                   height, tab_w, tab_d, 'right')
+                                   height, tab_w, tab_d, 'right',
+                                   joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Right face (x = x1): this piece is to the LEFT of that cut
     if x1 < total_w - 1e-6:
         tabs, slots = finger_joint('x', x1, y0, y1,
-                                   height, tab_w, tab_d, 'left')
+                                   height, tab_w, tab_d, 'left',
+                                   joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Bottom face (y = y0): this piece is ABOVE (top side of) that cut
     if y0 > 1e-6:
         tabs, slots = finger_joint('y', y0, x0, x1,
-                                   height, tab_w, tab_d, 'top')
+                                   height, tab_w, tab_d, 'top',
+                                   joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Top face (y = y1): this piece is BELOW (bottom side of) that cut
     if y1 < total_l - 1e-6:
         tabs, slots = finger_joint('y', y1, x0, x1,
-                                   height, tab_w, tab_d, 'bottom')
+                                   height, tab_w, tab_d, 'bottom',
+                                   joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     return body
@@ -1716,13 +1823,18 @@ def create_all_pieces(
     wall_thickness: float = None,
     max_piece_size: float = MAX_PIECE_SIZE,
     lattice_type: str = "hexagonal",
+    joint_width: float = None,
+    joint_length: float = 0.0,
+    support_spacing: float = 0.0,
+    support_width: float = None,
 ) -> list:
     """Create all interlocking pieces for a lattice flat panel.
 
     Parameters
     ----------
     width, length, height : overall part dimensions (mm)
-    perim_width           : solid border width and finger-joint bridge thickness
+    perim_width           : solid **outer** perimeter width (mm).  Controls the
+                            four frame strips at the panel edges.
     hex_size              : cell side length (mm).  Named ``hex_size`` for
                             backward compatibility; applies to any tiling.
     wall_thickness        : minimum wall between cells (mm).
@@ -1733,6 +1845,15 @@ def create_all_pieces(
                             printer exclusion zones.
     lattice_type          : one of the keys in :data:`LATTICE_TYPES`
                             (default ``"hexagonal"``).
+    joint_width           : **inner** joint / bridge width (mm).  Controls the
+                            bridge-band width at cut lines and the finger-joint
+                            tab geometry.  Defaults to *perim_width*.
+    joint_length          : active length of the finger-joint zone per cut face
+                            (mm).  ``0`` (default) spans the full face.
+    support_spacing       : spacing between interior support bars (mm).
+                            ``0`` (default) disables support bars.
+    support_width         : full width of each interior support bar (mm).
+                            Defaults to *joint_width*.
 
     Returns
     -------
@@ -1760,6 +1881,10 @@ def create_all_pieces(
                 wall_thickness,
                 x_cuts, y_cuts,
                 lattice_type=lattice_type,
+                joint_w=joint_width,
+                joint_length=joint_length,
+                support_spacing=support_spacing,
+                support_width=support_width,
             )
             pieces.append((f"Piece_{ix}_{iy}", shape))
 
@@ -1777,6 +1902,10 @@ def create_shelf_with_legs(
     leg_height: float = 100.0,
     leg_width: float = 20.0,
     lattice_type: str = "hexagonal",
+    joint_width: float = None,
+    joint_length: float = 0.0,
+    support_spacing: float = 0.0,
+    support_width: float = None,
 ) -> list:
     """Create all interlocking shelf pieces plus four individual corner legs.
 
@@ -1799,7 +1928,8 @@ def create_shelf_with_legs(
     Parameters
     ----------
     width, length, height : overall shelf panel dimensions (mm)
-    perim_width           : solid border / finger-joint bridge thickness (mm)
+    perim_width           : solid **outer** perimeter width (mm).  Controls the
+                            four frame strips at the panel edges.
     hex_size              : cell side length (mm).  Named ``hex_size`` for
                             backward compatibility; applies to any tiling.
     wall_thickness        : minimum wall between cells (mm).
@@ -1811,6 +1941,15 @@ def create_shelf_with_legs(
                             fits entirely within the solid perimeter band.
     lattice_type          : one of the keys in :data:`LATTICE_TYPES`
                             (default ``"hexagonal"``).
+    joint_width           : **inner** joint / bridge width (mm).  Controls the
+                            bridge-band width at cut lines and the finger-joint
+                            tab geometry.  Defaults to *perim_width*.
+    joint_length          : active length of the finger-joint zone per cut face
+                            (mm).  ``0`` (default) spans the full face.
+    support_spacing       : spacing between interior support bars (mm).
+                            ``0`` (default) disables support bars.
+    support_width         : full width of each interior support bar (mm).
+                            Defaults to *joint_width*.
 
     Returns
     -------
@@ -1901,6 +2040,10 @@ def create_shelf_with_legs(
                 x_cuts, y_cuts,
                 leg_zones=leg_zones,
                 lattice_type=lattice_type,
+                joint_w=joint_width,
+                joint_length=joint_length,
+                support_spacing=support_spacing,
+                support_width=support_width,
             )
 
             # Cut blind sockets and round through-holes that intersect this piece

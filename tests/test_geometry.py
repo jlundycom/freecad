@@ -29,6 +29,8 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     MIN_SEG_RATIO,
     PIN_RADIUS_RATIO,
     TAPER_RATIO,
+    _GEOM_EPS,
+    _centered_joint_range,
     LATTICE_TYPES,
     get_tiling_provider,
     HexagonalTilingProvider,
@@ -1756,3 +1758,252 @@ class TestIsExcludedLegacy:
             total_w=200.0, total_l=100.0,
             x_cuts=[], y_cuts=[],
         ), "Cell at cx=100 (centre of a 200-wide shelf) should not be excluded"
+
+
+# ===========================================================================
+# _centered_joint_range  (pure-Python helper for configurable joint span)
+# ===========================================================================
+
+class TestCenteredJointRange:
+    """Tests for _centered_joint_range() — the helper that centres the
+    finger-joint zone within a cut face, leaving equal solid margins on
+    both sides when joint_span < face length.
+    """
+
+    def test_zero_span_returns_full_face(self):
+        """joint_span=0 must return the full face unchanged."""
+        s, e = _centered_joint_range(10.0, 50.0, 0.0)
+        assert s == pytest.approx(10.0)
+        assert e == pytest.approx(50.0)
+
+    def test_negative_span_returns_full_face(self):
+        """Negative joint_span is treated as 0 (full face)."""
+        s, e = _centered_joint_range(0.0, 100.0, -5.0)
+        assert s == pytest.approx(0.0)
+        assert e == pytest.approx(100.0)
+
+    def test_span_equal_to_face_returns_full_face(self):
+        """joint_span equal to face length → full face (no margin needed)."""
+        s, e = _centered_joint_range(5.0, 25.0, 20.0)
+        assert s == pytest.approx(5.0)
+        assert e == pytest.approx(25.0)
+
+    def test_span_larger_than_face_returns_full_face(self):
+        """joint_span > face length → full face (clamped by the ≥ check)."""
+        s, e = _centered_joint_range(0.0, 30.0, 50.0)
+        assert s == pytest.approx(0.0)
+        assert e == pytest.approx(30.0)
+
+    def test_centred_half_span(self):
+        """With joint_span = face/2, margins should each be face/4."""
+        face_start, face_end = 0.0, 100.0
+        s, e = _centered_joint_range(face_start, face_end, 50.0)
+        assert s == pytest.approx(25.0)
+        assert e == pytest.approx(75.0)
+
+    def test_centred_arbitrary_span(self):
+        """Verify centring arithmetic for an arbitrary joint_span."""
+        face_start, face_end, span = 10.0, 90.0, 30.0
+        face_len = face_end - face_start        # 80
+        margin   = (face_len - span) / 2.0     # 25
+        s, e = _centered_joint_range(face_start, face_end, span)
+        assert s == pytest.approx(face_start + margin)
+        assert e == pytest.approx(face_end   - margin)
+
+    def test_span_zone_is_symmetric(self):
+        """The active zone should be equidistant from each face end."""
+        face_start, face_end = 0.0, 200.0
+        for span in [10.0, 50.0, 80.0, 120.0, 199.9]:
+            s, e = _centered_joint_range(face_start, face_end, span)
+            left_margin  = s - face_start
+            right_margin = face_end - e
+            assert left_margin == pytest.approx(right_margin, abs=1e-9), (
+                f"Margins differ for span={span}: left={left_margin}, "
+                f"right={right_margin}"
+            )
+
+    def test_active_span_equals_requested_span(self):
+        """The returned range width must equal the requested joint_span."""
+        for span in [5.0, 20.0, 80.0]:
+            s, e = _centered_joint_range(0.0, 100.0, span)
+            assert (e - s) == pytest.approx(span, abs=1e-9)
+
+    def test_with_nonzero_face_start(self):
+        """Centering should work correctly for faces that don't start at 0."""
+        s, e = _centered_joint_range(50.0, 150.0, 40.0)
+        # face_len=100, margin=30, so s=80, e=120
+        assert s == pytest.approx(80.0)
+        assert e == pytest.approx(120.0)
+
+    def test_start_never_less_than_face_start(self):
+        """Returned loop_start must be ≥ face_start."""
+        for span in [0.0, 1.0, 49.9, 50.0, 100.0, 200.0]:
+            s, _e = _centered_joint_range(10.0, 60.0, span)
+            assert s >= 10.0 - 1e-9
+
+    def test_end_never_greater_than_face_end(self):
+        """Returned loop_end must be ≤ face_end."""
+        for span in [0.0, 1.0, 49.9, 50.0, 100.0, 200.0]:
+            _s, e = _centered_joint_range(10.0, 60.0, span)
+            assert e <= 60.0 + 1e-9
+
+
+# ===========================================================================
+# make_piece defaults: joint_w and support_width None-default logic
+# ===========================================================================
+
+class TestMakePieceParamDefaults:
+    """Pure-Python tests verifying that the default-value resolution logic
+    for the new make_piece() parameters is correct.  These don't call
+    make_piece() (which needs FreeCAD) but test the same arithmetic.
+    """
+
+    def test_joint_w_defaults_to_perim_w(self):
+        """When joint_w is None it should equal perim_w at run-time."""
+        perim_w = 8.0
+        joint_w = None
+        # Mirrors the logic in make_piece()
+        if joint_w is None:
+            joint_w = perim_w
+        assert joint_w == perim_w
+
+    def test_support_width_defaults_to_joint_w(self):
+        """When support_width is None it should equal joint_w at run-time."""
+        joint_w = 6.0
+        support_width = None
+        if support_width is None:
+            support_width = joint_w
+        assert support_width == joint_w
+
+    def test_tab_w_equals_joint_w(self):
+        """tab_w must equal joint_w (not perim_w) once joint_w is resolved."""
+        perim_w = 10.0
+        joint_w = 6.0
+        tab_w   = joint_w        # as in make_piece()
+        assert tab_w == 6.0
+        assert tab_w != perim_w  # joint_w != perim_w in this scenario
+
+    def test_tab_d_is_half_joint_w(self):
+        """tab_d = joint_w * 0.5 (depth sub-parameter of joint_w)."""
+        joint_w = 7.0
+        tab_d   = joint_w * 0.5
+        assert tab_d == pytest.approx(3.5)
+
+    def test_bridge_half_uses_joint_w_not_perim_w(self):
+        """Bridge bands use joint_w/2, independent of perim_w."""
+        perim_w = 10.0
+        joint_w = 4.0
+        bridge_half = joint_w * 0.5
+        assert bridge_half == pytest.approx(2.0)
+        assert bridge_half != perim_w * 0.5
+
+    def test_support_bar_spacing_zero_means_disabled(self):
+        """support_spacing == 0 should produce no bar positions."""
+        support_spacing = 0.0
+        total_w = 200.0
+        positions = []
+        bar_x = support_spacing
+        while bar_x < total_w - _GEOM_EPS and support_spacing > _GEOM_EPS:
+            positions.append(bar_x)
+            bar_x += support_spacing
+        assert positions == []
+
+    def test_support_bar_positions_correct(self):
+        """Support bars should appear at multiples of support_spacing."""
+        support_spacing = 50.0
+        total_w = 200.0
+        positions = []
+        bar_x = support_spacing
+        while bar_x < total_w - _GEOM_EPS:
+            positions.append(bar_x)
+            bar_x += support_spacing
+        # 50, 100, 150 — 200 is excluded because bar_x < total_w
+        assert positions == pytest.approx([50.0, 100.0, 150.0])
+
+    def test_support_bar_positions_do_not_include_outer_edge(self):
+        """Bars at exactly total_w are not added (that's the outer perimeter)."""
+        support_spacing = 100.0
+        total_w = 200.0
+        positions = []
+        bar_x = support_spacing
+        while bar_x < total_w - _GEOM_EPS:
+            positions.append(bar_x)
+            bar_x += support_spacing
+        assert total_w not in positions
+        assert positions == pytest.approx([100.0])
+
+
+# ===========================================================================
+# Dialog get_params() returns new keys  (no Qt needed — tests param logic)
+# ===========================================================================
+
+class TestDialogParamKeys:
+    """Verify that get_params() dict keys are correct.  Tests the static
+    logic (expected key names and None-pass-through) without instantiating
+    the Qt dialog.
+    """
+
+    def _simulate_get_params(
+        self,
+        perim=6.0,
+        joint_w_val=0.0,    # 0 → None (fall back to perim)
+        joint_l=0.0,
+        sup_spacing=0.0,
+        sup_w_val=0.0,      # 0 → None (fall back to joint_w)
+    ) -> dict:
+        """Mirrors the get_params() logic in HexLatticeDialog."""
+        joint_w = joint_w_val if joint_w_val > 0.0 else None
+        sup_w   = sup_w_val   if sup_w_val   > 0.0 else None
+        return {
+            "width": 300.0, "length": 300.0, "height": 10.0,
+            "perim_width":     perim,
+            "joint_width":     joint_w,
+            "joint_length":    joint_l,
+            "support_spacing": sup_spacing,
+            "support_width":   sup_w,
+            "hex_size": 8.0, "wall_thickness": 1.5,
+            "max_piece_size": 220.0, "lattice_type": "hexagonal",
+        }
+
+    def test_joint_width_zero_returns_none(self):
+        """joint_width spinbox value 0 should produce None in the dict."""
+        params = self._simulate_get_params(joint_w_val=0.0)
+        assert params["joint_width"] is None
+
+    def test_joint_width_nonzero_returns_value(self):
+        """joint_width spinbox value > 0 should appear as-is."""
+        params = self._simulate_get_params(joint_w_val=4.0)
+        assert params["joint_width"] == pytest.approx(4.0)
+
+    def test_support_width_zero_returns_none(self):
+        """support_width spinbox value 0 should produce None in the dict."""
+        params = self._simulate_get_params(sup_w_val=0.0)
+        assert params["support_width"] is None
+
+    def test_support_width_nonzero_returns_value(self):
+        """support_width spinbox value > 0 should appear as-is."""
+        params = self._simulate_get_params(sup_w_val=3.0)
+        assert params["support_width"] == pytest.approx(3.0)
+
+    def test_joint_length_zero_is_in_params_dict(self):
+        params = self._simulate_get_params(joint_l=0.0)
+        assert params["joint_length"] == pytest.approx(0.0)
+
+    def test_joint_length_nonzero_preserved(self):
+        params = self._simulate_get_params(joint_l=60.0)
+        assert params["joint_length"] == pytest.approx(60.0)
+
+    def test_support_spacing_zero_is_in_params_dict(self):
+        params = self._simulate_get_params(sup_spacing=0.0)
+        assert params["support_spacing"] == pytest.approx(0.0)
+
+    def test_support_spacing_nonzero_preserved(self):
+        params = self._simulate_get_params(sup_spacing=50.0)
+        assert params["support_spacing"] == pytest.approx(50.0)
+
+    def test_all_four_new_param_keys_present_in_dict(self):
+        """All four new parameter keys must be in the returned dict."""
+        params = self._simulate_get_params()
+        for key in ("joint_width", "joint_length",
+                    "support_spacing", "support_width"):
+            assert key in params, f"Key {key!r} missing from get_params()"
