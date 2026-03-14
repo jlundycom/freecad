@@ -47,6 +47,20 @@ Finger joints
 
   Left piece tab  (x-cut):  x ∈ [cut, cut+tab_d],    y ∈ [seg_s+fit/2, seg_e-fit/2]
   Right piece slot (x-cut): x ∈ [cut, cut+tab_d+fit], y ∈ [seg_s-fit/2, seg_e+fit/2]
+
+  Taper (draft angle in Z)
+  ~~~~~~~~~~~~~~~~~~~~~~~~
+  Every tab and its matching slot are trapezoidal in the Z (height) direction:
+
+      depth at z = 0       (bottom) = tab_d × (1 – TAPER_RATIO)   ← narrower
+      depth at z = height  (top)    = tab_d × (1 + TAPER_RATIO)   ← wider
+
+  The wider-at-top / narrower-at-bottom profile means:
+
+  * Pieces are assembled by pushing them together horizontally (in X or Y).
+  * Once engaged, the tapered faces contact at the bottom (z = 0), providing
+    a positive vertical support reference — the joint cannot rack downward.
+  * The draft angle also acts as a self-aligning guide during assembly.
 """
 
 import math
@@ -59,6 +73,8 @@ MAX_PIECE_SIZE   = 220.0   # mm  – maximum dimension of a printable piece
 FIT_CLEARANCE    = 0.15    # mm  – assembly clearance (bilateral)
 MIN_SEG_RATIO    = 0.25    # minimum fraction of tab_w for an end-segment to be kept
 PIN_RADIUS_RATIO = 0.25    # round through-pin radius = leg_width × PIN_RADIUS_RATIO
+TAPER_RATIO      = 0.20    # finger-joint draft: top depth = tab_d*(1+ratio),
+                           #                     bottom depth = tab_d*(1-ratio)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +231,68 @@ def _cut_shapes(base, cutters):
 
 
 # ---------------------------------------------------------------------------
+# Tapered-prism helpers (finger-joint draft geometry)
+# ---------------------------------------------------------------------------
+
+def _make_tapered_prism_x(
+    x0_bot: float, x1_bot: float,
+    x0_top: float, x1_top: float,
+    y_start: float, y_extent: float,
+    height: float,
+) -> object:  # returns Part.Shape
+    """Return a tapered prism for an X-axis finger joint.
+
+    The cross-section (viewed along Y) is a trapezoid:
+      * z = 0      : x from ``x0_bot`` to ``x1_bot``
+      * z = height : x from ``x0_top`` to ``x1_top``
+
+    The prism is extruded in +Y by ``y_extent`` starting at ``y_start``.
+    """
+    import FreeCAD as App
+    import Part
+
+    pts = [
+        App.Vector(x0_bot, y_start, 0.0),
+        App.Vector(x1_bot, y_start, 0.0),
+        App.Vector(x1_top, y_start, height),
+        App.Vector(x0_top, y_start, height),
+        App.Vector(x0_bot, y_start, 0.0),   # close
+    ]
+    wire = Part.makePolygon(pts)
+    face = Part.Face(wire)
+    return face.extrude(App.Vector(0.0, y_extent, 0.0))
+
+
+def _make_tapered_prism_y(
+    y0_bot: float, y1_bot: float,
+    y0_top: float, y1_top: float,
+    x_start: float, x_extent: float,
+    height: float,
+) -> object:  # returns Part.Shape
+    """Return a tapered prism for a Y-axis finger joint.
+
+    The cross-section (viewed along X) is a trapezoid:
+      * z = 0      : y from ``y0_bot`` to ``y1_bot``
+      * z = height : y from ``y0_top`` to ``y1_top``
+
+    The prism is extruded in +X by ``x_extent`` starting at ``x_start``.
+    """
+    import FreeCAD as App
+    import Part
+
+    pts = [
+        App.Vector(x_start, y0_bot, 0.0),
+        App.Vector(x_start, y1_bot, 0.0),
+        App.Vector(x_start, y1_top, height),
+        App.Vector(x_start, y0_top, height),
+        App.Vector(x_start, y0_bot, 0.0),   # close
+    ]
+    wire = Part.makePolygon(pts)
+    face = Part.Face(wire)
+    return face.extrude(App.Vector(x_extent, 0.0, 0.0))
+
+
+# ---------------------------------------------------------------------------
 # Finger-joint builder
 # ---------------------------------------------------------------------------
 
@@ -238,15 +316,24 @@ def finger_joint(
     face_end   : end   of the face range in the *parallel* axis
     height     : Z height of the part
     tab_w      : finger width  (along the face)
-    tab_d      : finger depth  (into the adjacent piece)
+    tab_d      : finger depth  (into the adjacent piece); this is the *nominal*
+                 depth at the mid-height.  The actual depth is tapered:
+                 ``tab_d * (1 - TAPER_RATIO)`` at z = 0 (narrow / bottom),
+                 ``tab_d * (1 + TAPER_RATIO)`` at z = height (wide / top).
     this_side  : 'left'|'right' for x-cuts; 'bottom'|'top' for y-cuts
     """
-    import FreeCAD as App
-    import Part
+    import FreeCAD as App  # noqa: F401 – kept for completeness; used by helpers
+    import Part             # noqa: F401
 
-    fit       = FIT_CLEARANCE
-    tabs      = []
-    slots     = []
+    fit    = FIT_CLEARANCE
+    tabs   = []
+    slots  = []
+
+    # Tapered depths: wider at z=height (top), narrower at z=0 (bottom).
+    # Assembly direction is from the top; the narrower bottom provides a
+    # positive support contact once the pieces are fully engaged.
+    td_bot = tab_d * (1.0 - TAPER_RATIO)   # depth at z = 0
+    td_top = tab_d * (1.0 + TAPER_RATIO)   # depth at z = height
 
     # 'left'/'bottom' pieces: tabs at even finger positions (0, 2, 4 …)
     first_is_tab = this_side in ('left', 'bottom')
@@ -266,80 +353,82 @@ def finger_joint(
         is_tab = (finger_idx % 2 == 0) == first_is_tab
 
         if axis == 'x':
+            y0  = seg_s + fit * 0.5
+            dy  = seg_l - fit
+            y0s = seg_s - fit * 0.5
+            dys = seg_l + fit
+
             if is_tab:
                 if this_side == 'left':
-                    # Tab extends in +X from cut_pos
-                    t = Part.makeBox(tab_d,
-                                     seg_l - fit,
-                                     height,
-                                     App.Vector(cut_pos,
-                                                seg_s + fit * 0.5,
-                                                0.0))
+                    # Tab extends in +X from cut_pos; wider at top, narrower at bottom
+                    t = _make_tapered_prism_x(
+                        cut_pos, cut_pos + td_bot,
+                        cut_pos, cut_pos + td_top,
+                        y0, dy, height,
+                    )
                 else:  # 'right'
                     # Tab extends in -X from cut_pos
-                    t = Part.makeBox(tab_d,
-                                     seg_l - fit,
-                                     height,
-                                     App.Vector(cut_pos - tab_d,
-                                                seg_s + fit * 0.5,
-                                                0.0))
+                    t = _make_tapered_prism_x(
+                        cut_pos - td_bot, cut_pos,
+                        cut_pos - td_top, cut_pos,
+                        y0, dy, height,
+                    )
                 tabs.append(t)
             else:
                 # Slot (subtracted from body) to receive the opposite tab
                 if this_side == 'left':
-                    # Opposite ('right') tab comes from cut_pos-tab_d to cut_pos
-                    s = Part.makeBox(tab_d + fit,
-                                     seg_l + fit,
-                                     height,
-                                     App.Vector(cut_pos - tab_d - fit,
-                                                seg_s - fit * 0.5,
-                                                0.0))
+                    # Opposite ('right') tab extends in -X; slot accepts it
+                    s = _make_tapered_prism_x(
+                        cut_pos - td_bot - fit, cut_pos,
+                        cut_pos - td_top - fit, cut_pos,
+                        y0s, dys, height,
+                    )
                 else:  # 'right'
-                    # Opposite ('left') tab comes from cut_pos to cut_pos+tab_d
-                    s = Part.makeBox(tab_d + fit,
-                                     seg_l + fit,
-                                     height,
-                                     App.Vector(cut_pos,
-                                                seg_s - fit * 0.5,
-                                                0.0))
+                    # Opposite ('left') tab extends in +X; slot accepts it
+                    s = _make_tapered_prism_x(
+                        cut_pos, cut_pos + td_bot + fit,
+                        cut_pos, cut_pos + td_top + fit,
+                        y0s, dys, height,
+                    )
                 slots.append(s)
 
         else:  # axis == 'y'
+            x0  = seg_s + fit * 0.5
+            dx  = seg_l - fit
+            x0s = seg_s - fit * 0.5
+            dxs = seg_l + fit
+
             if is_tab:
                 if this_side == 'bottom':
                     # Tab extends in +Y from cut_pos
-                    t = Part.makeBox(seg_l - fit,
-                                     tab_d,
-                                     height,
-                                     App.Vector(seg_s + fit * 0.5,
-                                                cut_pos,
-                                                0.0))
+                    t = _make_tapered_prism_y(
+                        cut_pos, cut_pos + td_bot,
+                        cut_pos, cut_pos + td_top,
+                        x0, dx, height,
+                    )
                 else:  # 'top'
                     # Tab extends in -Y from cut_pos
-                    t = Part.makeBox(seg_l - fit,
-                                     tab_d,
-                                     height,
-                                     App.Vector(seg_s + fit * 0.5,
-                                                cut_pos - tab_d,
-                                                0.0))
+                    t = _make_tapered_prism_y(
+                        cut_pos - td_bot, cut_pos,
+                        cut_pos - td_top, cut_pos,
+                        x0, dx, height,
+                    )
                 tabs.append(t)
             else:
                 if this_side == 'bottom':
-                    # Opposite ('top') tab comes from cut_pos-tab_d to cut_pos
-                    s = Part.makeBox(seg_l + fit,
-                                     tab_d + fit,
-                                     height,
-                                     App.Vector(seg_s - fit * 0.5,
-                                                cut_pos - tab_d - fit,
-                                                0.0))
+                    # Opposite ('top') tab extends in -Y; slot accepts it
+                    s = _make_tapered_prism_y(
+                        cut_pos - td_bot - fit, cut_pos,
+                        cut_pos - td_top - fit, cut_pos,
+                        x0s, dxs, height,
+                    )
                 else:  # 'top'
-                    # Opposite ('bottom') tab comes from cut_pos to cut_pos+tab_d
-                    s = Part.makeBox(seg_l + fit,
-                                     tab_d + fit,
-                                     height,
-                                     App.Vector(seg_s - fit * 0.5,
-                                                cut_pos,
-                                                0.0))
+                    # Opposite ('bottom') tab extends in +Y; slot accepts it
+                    s = _make_tapered_prism_y(
+                        cut_pos, cut_pos + td_bot + fit,
+                        cut_pos, cut_pos + td_top + fit,
+                        x0s, dxs, height,
+                    )
                 slots.append(s)
 
         pos        += tab_w

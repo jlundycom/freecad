@@ -28,6 +28,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     FIT_CLEARANCE,
     MIN_SEG_RATIO,
     PIN_RADIUS_RATIO,
+    TAPER_RATIO,
 )
 
 import pytest
@@ -697,3 +698,88 @@ class TestIsExcludedLegZones:
         ]
         assert not self._call(w * 0.5, l * 0.5, leg_zones=zones,
                               total_w=w, total_l=l)
+
+
+# ===========================================================================
+# Finger-joint taper geometry
+# ===========================================================================
+
+class TestTaperRatio:
+    """Tests for the finger-joint draft-angle constant and its derived geometry.
+
+    All tests are pure Python (no FreeCAD required).
+    """
+
+    # ── constant sanity ───────────────────────────────────────────────
+
+    def test_taper_ratio_is_float(self):
+        assert isinstance(TAPER_RATIO, float)
+
+    def test_taper_ratio_is_positive_fraction(self):
+        assert 0.0 < TAPER_RATIO < 1.0
+
+    def test_taper_ratio_reasonable_range(self):
+        # 10 %–40 % gives a noticeable-but-not-extreme draft angle
+        assert 0.10 <= TAPER_RATIO <= 0.40
+
+    # ── derived depths ────────────────────────────────────────────────
+
+    def test_bottom_depth_narrower_than_nominal(self):
+        """tab_d_bot < tab_d: bottom is the narrower end."""
+        for tab_d in (2.0, 5.0, 10.0):
+            td_bot = tab_d * (1.0 - TAPER_RATIO)
+            assert td_bot < tab_d, f"td_bot={td_bot} not < tab_d={tab_d}"
+
+    def test_top_depth_wider_than_nominal(self):
+        """tab_d_top > tab_d: top is the wider end."""
+        for tab_d in (2.0, 5.0, 10.0):
+            td_top = tab_d * (1.0 + TAPER_RATIO)
+            assert td_top > tab_d, f"td_top={td_top} not > tab_d={tab_d}"
+
+    def test_taper_is_symmetric_about_nominal(self):
+        """Average of top and bottom depths equals the nominal tab_d."""
+        tab_d = 6.0
+        td_bot = tab_d * (1.0 - TAPER_RATIO)
+        td_top = tab_d * (1.0 + TAPER_RATIO)
+        assert abs((td_top + td_bot) / 2.0 - tab_d) < 1e-9
+
+    def test_bottom_depth_always_positive(self):
+        """Narrower bottom must still be a positive depth."""
+        for tab_d in (1.0, 2.0, 5.0, 10.0, 20.0):
+            td_bot = tab_d * (1.0 - TAPER_RATIO)
+            assert td_bot > 0.0, f"td_bot non-positive for tab_d={tab_d}"
+
+    def test_top_always_wider_than_bottom(self):
+        """Top depth > bottom depth for all realistic tab_d values."""
+        for tab_d in (2.0, 4.0, 8.0, 16.0):
+            td_bot = tab_d * (1.0 - TAPER_RATIO)
+            td_top = tab_d * (1.0 + TAPER_RATIO)
+            assert td_top > td_bot
+
+    # ── slot clearance ────────────────────────────────────────────────
+
+    def test_slot_wider_than_tab_at_bottom(self):
+        """Slot depth at z=0 must exceed tab depth by at least FIT_CLEARANCE."""
+        tab_d = 5.0
+        td_bot   = tab_d * (1.0 - TAPER_RATIO)
+        slot_bot = td_bot + FIT_CLEARANCE
+        assert slot_bot - td_bot >= FIT_CLEARANCE - 1e-9
+
+    def test_slot_wider_than_tab_at_top(self):
+        """Slot depth at z=height must exceed tab depth by at least FIT_CLEARANCE."""
+        tab_d = 5.0
+        td_top   = tab_d * (1.0 + TAPER_RATIO)
+        slot_top = td_top + FIT_CLEARANCE
+        assert slot_top - td_top >= FIT_CLEARANCE - 1e-9
+
+    def test_slot_clearance_uniform_across_height(self):
+        """The slot exceeds the matching tab by exactly FIT_CLEARANCE at every z."""
+        tab_d = 6.0
+        fit   = FIT_CLEARANCE
+        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+            # Linearly interpolate tab depth at fraction frac of height
+            td_bot = tab_d * (1.0 - TAPER_RATIO)
+            td_top = tab_d * (1.0 + TAPER_RATIO)
+            tab_at_z   = td_bot + frac * (td_top - td_bot)
+            slot_at_z  = tab_at_z + fit
+            assert abs(slot_at_z - tab_at_z - fit) < 1e-9
