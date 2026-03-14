@@ -85,10 +85,11 @@ TAPER_RATIO      = 0.20    # finger-joint draft: top depth = tab_d*(1+ratio),
 #: Only the three regular-polygon tilings are implemented in Phase 1.
 #: See TILING_PLAN.md for the plan to add the remaining 8 semi-regular tilings.
 LATTICE_TYPES = {
-    "hexagonal":    "Hexagonal (6.6.6)",
-    "square":       "Square (4.4.4.4)",
-    "triangular":   "Triangular (3.3.3.3.3.3)",
-    "trihexagonal": "Trihexagonal (3.6.3.6)",
+    "hexagonal":        "Hexagonal (6.6.6)",
+    "square":           "Square (4.4.4.4)",
+    "triangular":       "Triangular (3.3.3.3.3.3)",
+    "trihexagonal":     "Trihexagonal (3.6.3.6)",
+    "truncated_square": "Truncated Square (4.8.8)",
 }
 
 
@@ -368,12 +369,88 @@ class TrihexagonalTilingProvider(TilingProvider):
         return cells
 
 
+class TruncatedSquareTilingProvider(TilingProvider):
+    """Semi-regular truncated square tiling — Schläfli vertex figure 4.8.8.
+
+    Regular octagons and squares sharing the same edge length.  At every
+    vertex one square and two octagons meet (interior angles 90° + 135° +
+    135° = 360°).  Each octagon borders 4 squares (at cardinal directions)
+    and 4 other octagons (at diagonal directions) alternately.
+
+    The layout uses a square lattice with period::
+
+        a = step · (2 + √2)   where step = cell_size + wall_t
+
+    Each unit cell contains two of each polygon type:
+
+    * Octagon : offset ``(0,      0      )``  n=8, rot=22.5°
+    * Octagon : offset ``(a/2,    a/2    )``  n=8, rot=22.5°
+    * Square  : offset ``(a/2,    0      )``  n=4, rot=45°
+    * Square  : offset ``(0,      a/2    )``  n=4, rot=45°
+
+    where ``a/2 = step · (2+√2)/2``.  The octagon rotation of 22.5° gives
+    flat sides on top and bottom (apothems pointing along cardinal and diagonal
+    directions) so that edge-sharing with both neighbour types is geometrically
+    exact at wall_t = 0.
+
+    The lattice is strictly rectangular (a1 ⊥ a2), so no oblique drift
+    occurs; the standard ±1 row/column margin is sufficient.
+    """
+
+    display_name = "Truncated Square (4.8.8)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        # Largest polygon is the octagon.  Circumradius of a regular octagon
+        # with side s: R = s / (2 · sin(π/8))
+        return cell_size / (2.0 * math.sin(math.pi / 8.0))
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        step   = cell_size + wall_t
+        half_a = step * (2.0 + math.sqrt(2)) / 2.0   # = a/2
+        a      = 2.0 * half_a                          # lattice period
+
+        cells = []
+        if gx1 <= gx0 or gy1 <= gy0:
+            return cells
+
+        n_cols = int((gx1 - gx0) / a) + 3
+        n_rows = int((gy1 - gy0) / a) + 3
+
+        for row in range(-1, n_rows + 1):
+            ly = gy0 + row * a
+            for col in range(-1, n_cols + 1):
+                lx = gx0 + col * a
+
+                # Octagon at lattice point (0, 0)
+                if gx0 <= lx <= gx1 and gy0 <= ly <= gy1:
+                    cells.append((lx, ly, 8, 22.5))
+
+                # Octagon at cell centre (a/2, a/2)
+                cx = lx + half_a
+                cy = ly + half_a
+                if gx0 <= cx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((cx, cy, 8, 22.5))
+
+                # Square at (a/2, 0)  — between horizontal octagon neighbours
+                cx = lx + half_a
+                if gx0 <= cx <= gx1 and gy0 <= ly <= gy1:
+                    cells.append((cx, ly, 4, 45.0))
+
+                # Square at (0, a/2)  — between vertical octagon neighbours
+                cy = ly + half_a
+                if gx0 <= lx <= gx1 and gy0 <= cy <= gy1:
+                    cells.append((lx, cy, 4, 45.0))
+
+        return cells
+
+
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
-    "hexagonal":    HexagonalTilingProvider(),
-    "square":       SquareTilingProvider(),
-    "triangular":   TriangularTilingProvider(),
-    "trihexagonal": TrihexagonalTilingProvider(),
+    "hexagonal":        HexagonalTilingProvider(),
+    "square":           SquareTilingProvider(),
+    "triangular":       TriangularTilingProvider(),
+    "trihexagonal":     TrihexagonalTilingProvider(),
+    "truncated_square": TruncatedSquareTilingProvider(),
 }
 
 

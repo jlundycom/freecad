@@ -71,7 +71,7 @@ due to the oblique coordinate system.
 
 ---
 
-## Implemented Tilings (Phase 1 + Phase 2 start)
+## Implemented Tilings (Phase 1 + Phase 2)
 
 | Key | Display Name | Schläfli | Cell types |
 |-----|-------------|----------|-----------|
@@ -79,6 +79,7 @@ due to the oblique coordinate system.
 | `square` | Square (4.4.4.4) | `{4}` | Regular square |
 | `triangular` | Triangular (3.3.3.3.3.3) | `{3}` | Equilateral triangle (up + down) |
 | `trihexagonal` | Trihexagonal (3.6.3.6) | `r{6}` | Equilateral triangle + regular hexagon |
+| `truncated_square` | Truncated Square (4.8.8) | `t{4}` | Regular square + regular octagon |
 
 ---
 
@@ -98,15 +99,12 @@ Implemented in `TrihexagonalTilingProvider`.  Lattice `a1 = (2·step, 0)`,
 
 ---
 
-### Truncated Square (4.8.8)  — symbol `t{4}`
+### ~~Truncated Square (4.8.8)~~ — **DONE** (key `truncated_square`)
 
-Squares surrounded by octagons.
-
-* **Lattice**: square, `a1 = (s4 + s8*d, 0)`, `a2 = (0, s4 + s8*d)`,
-  where `s4` = square side, `s8` = octagon side, `d = 1 + √2`.
-* **Basis** (1 square + 2 octagons per unit cell — exact offsets depend on
-  relative sizes; typically both polygon types share a common side length).
-* **Circumradius**: use octagon circumradius = `cell_size / (2 sin(π/8))`
+Implemented in `TruncatedSquareTilingProvider`.  Rectangular lattice with
+`a = step·(2+√2)`.  Unit cell holds 2 octagons (at `(0,0)` and `(a/2,a/2)`)
+and 2 squares (at `(a/2,0)` and `(0,a/2)`).  All polygons share the same
+edge length; octagons use rotation 22.5°, squares use rotation 45°.
 
 ---
 

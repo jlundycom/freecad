@@ -35,6 +35,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     SquareTilingProvider,
     TriangularTilingProvider,
     TrihexagonalTilingProvider,
+    TruncatedSquareTilingProvider,
 )
 
 import pytest
@@ -805,11 +806,12 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_four_entries(self):
-        assert len(LATTICE_TYPES) == 4
+    def test_lattice_types_has_five_entries(self):
+        assert len(LATTICE_TYPES) == 5
 
     def test_required_keys_present(self):
-        for key in ("hexagonal", "square", "triangular", "trihexagonal"):
+        for key in ("hexagonal", "square", "triangular", "trihexagonal",
+                    "truncated_square"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
 
     def test_all_display_names_are_strings(self):
@@ -817,10 +819,11 @@ class TestLatticeTypes:
             assert isinstance(name, str) and name, f"Bad display name for {key!r}"
 
     def test_get_tiling_provider_returns_correct_types(self):
-        assert isinstance(get_tiling_provider("hexagonal"),    HexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("square"),       SquareTilingProvider)
-        assert isinstance(get_tiling_provider("triangular"),   TriangularTilingProvider)
-        assert isinstance(get_tiling_provider("trihexagonal"), TrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("hexagonal"),        HexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("square"),           SquareTilingProvider)
+        assert isinstance(get_tiling_provider("triangular"),       TriangularTilingProvider)
+        assert isinstance(get_tiling_provider("trihexagonal"),     TrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_square"), TruncatedSquareTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
         with pytest.raises(ValueError):
@@ -863,6 +866,9 @@ class TestTilingCells:
     def test_trihexagonal_non_empty(self):
         assert len(self._cells("trihexagonal")) > 0
 
+    def test_truncated_square_non_empty(self):
+        assert len(self._cells("truncated_square")) > 0
+
     def test_each_cell_is_4_tuple(self):
         for key in LATTICE_TYPES:
             for cell in self._cells(key):
@@ -884,6 +890,29 @@ class TestTilingCells:
         """Trihexagonal cells must be either hexagons (n=6) or triangles (n=3)."""
         for cx, cy, n, rot in self._cells("trihexagonal"):
             assert n in (3, 6), f"Unexpected n_sides={n} in trihexagonal tiling"
+
+    def test_n_sides_correct_for_truncated_square(self):
+        """Truncated-square cells must be octagons (n=8) or squares (n=4)."""
+        for cx, cy, n, rot in self._cells("truncated_square"):
+            assert n in (4, 8), f"Unexpected n_sides={n} in truncated_square tiling"
+
+    def test_truncated_square_has_both_octagons_and_squares(self):
+        """Truncated-square tiling must contain both n=8 and n=4 cells."""
+        sides = {n for _cx, _cy, n, _rot in self._cells("truncated_square")}
+        assert 8 in sides, "Missing octagons (n=8) in truncated_square tiling"
+        assert 4 in sides, "Missing squares (n=4) in truncated_square tiling"
+
+    def test_truncated_square_octagon_to_square_ratio(self):
+        """Truncated-square tiling has exactly 1 octagon per square."""
+        cells  = self._cells("truncated_square")
+        n_oct  = sum(1 for _cx, _cy, n, _rot in cells if n == 8)
+        n_sq   = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        assert n_oct > 0, "No octagons in truncated_square tiling"
+        # In an infinite tiling the ratio is exactly 1.  A finite region can
+        # clip a few cells near the boundary; allow ±20 % tolerance.
+        assert abs(n_oct / n_sq - 1.0) < 0.20, (
+            f"Expected oct/sq ratio ≈ 1.0, got {n_oct/n_sq:.3f}"
+        )
 
     def test_trihexagonal_has_both_hexagons_and_triangles(self):
         """Trihexagonal tiling must contain both n=6 and n=3 cells."""
@@ -942,6 +971,12 @@ class TestTilingCells:
             assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
             assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
 
+    def test_all_centres_within_region_truncated_square(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("truncated_square"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
     # ── no duplicate centres ──────────────────────────────────────────────
 
     def test_no_duplicate_centres_hexagonal(self):
@@ -963,6 +998,11 @@ class TestTilingCells:
         pts = [(round(cx, 6), round(cy, 6))
                for cx, cy, _n, _rot in self._cells("trihexagonal")]
         assert len(pts) == len(set(pts)), "Duplicate cell centres in trihexagonal tiling"
+
+    def test_no_duplicate_centres_truncated_square(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("truncated_square")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in truncated_square tiling"
 
     # ── empty region returns empty list ───────────────────────────────────
 
@@ -1035,6 +1075,13 @@ class TestTilingCells:
         for s in (5.0, 8.0, 12.0):
             assert abs(p.cell_circumradius(s) - s) < 1e-9
 
+    def test_truncated_square_circumradius(self):
+        """Truncated-square circumradius is the octagon circumradius = s/(2·sin(π/8))."""
+        p = get_tiling_provider("truncated_square")
+        for s in (5.0, 8.0, 12.0):
+            expected = s / (2.0 * math.sin(math.pi / 8.0))
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
     # ── trihexagonal adjacency distance ───────────────────────────────────
 
     def test_trihexagonal_adjacency_distance_at_zero_wall(self):
@@ -1053,6 +1100,24 @@ class TestTilingCells:
                     min_dist = d
         assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
             f"Trihexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_truncated_square_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0, the nearest-neighbour centre-to-centre distance in the
+        truncated-square tiling is step·(2+√2)/2 (oct-centre to sq-centre)."""
+        cell_size = 9.0
+        expected  = cell_size * (2.0 + math.sqrt(2)) / 2.0
+        p  = get_tiling_provider("truncated_square")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Truncated-square min dist {min_dist:.4f} ≠ expected {expected:.4f}"
         )
 
     # ── trihexagonal uniform coverage (oblique-drift guard) ───────────────
