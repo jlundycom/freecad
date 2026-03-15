@@ -44,14 +44,16 @@ class HexLatticeDialog(QtWidgets.QDialog):
         self.max_piece_spin  = _spin(10.0,   220.0, 220.0)
 
         # Joint / bridge parameters
-        # joint_width: inner bridge width at cut lines and finger-joint geometry.
+        # joint_width (UI label: "Finger width"): inner bridge width at cut
+        #   lines and finger-joint tab width.  Named joint_width internally for
+        #   backward compatibility; displayed as "Finger width" to users.
         #   Defaults to perim_width (same field value) at run-time if 0.
         self.joint_width_spin = _spin(0.0, 100.0, 0.0)
         self.joint_width_spin.setSpecialValueText("= Perimeter width")
 
-        # joint_length: active span of finger joints on each cut face; 0 = full.
-        self.joint_length_spin = _spin(0.0, 5000.0, 0.0)
-        self.joint_length_spin.setSpecialValueText("Full face")
+        # finger_spacing: gap between consecutive fingers; 0 = contiguous.
+        self.finger_spacing_spin = _spin(0.0, 5000.0, 0.0)
+        self.finger_spacing_spin.setSpecialValueText("Contiguous (0 = no gap)")
 
         # joint_depth: how far each finger penetrates into the adjacent piece.
         #   0 = use the default (= joint_width / 2, i.e. full bridge half-width).
@@ -76,10 +78,10 @@ class HexLatticeDialog(QtWidgets.QDialog):
         form.addRow("Length (Y):",                  self.length_spin)
         form.addRow("Height (Z):",                  self.height_spin)
         form.addRow("Perimeter width:",             self.perim_spin)
-        form.addRow("Joint bridge width\n(0 = same as perimeter):",
+        form.addRow("Finger width\n(0 = same as perimeter):",
                     self.joint_width_spin)
-        form.addRow("Joint length\n(0 = full face):",
-                    self.joint_length_spin)
+        form.addRow("Finger spacing\n(0 = contiguous, no gap):",
+                    self.finger_spacing_spin)
         form.addRow("Joint depth\n(0 = half joint width):",
                     self.joint_depth_spin)
         form.addRow("Support bar spacing\n(0 = none):",
@@ -95,14 +97,15 @@ class HexLatticeDialog(QtWidgets.QDialog):
         self._info_label = QtWidgets.QLabel(
             "<i>Parts wider/longer than <b>Max piece size</b> are automatically\n"
             "sliced into interlocking finger-joint pieces for 3-D printing.\n"
-            "<b>Joint bridge width</b> controls the bridge band at cut lines and "
-            "the finger-joint tab size (defaults to Perimeter width when 0). "
-            "<b>Joint length</b> limits how much of each cut face carries finger "
-            "joints — the rest stays solid (0 = full face). "
+            "<b>Finger width</b> sets the width (mm) of each interlocking tab "
+            "(defaults to Perimeter width when 0). "
+            "<b>Finger spacing</b> sets the gap (mm) between consecutive fingers "
+            "— areas between fingers are flat. 0 means fingers are contiguous "
+            "(no gap, fills the full face). "
             "<b>Joint depth</b> controls how far each finger penetrates into the "
             "adjacent piece: a smaller value leaves a solid base in the bridge "
             "band, forming a continuous support bar across the join "
-            "(0 = half of joint bridge width). "
+            "(0 = half of finger width). "
             "<b>Support bar spacing</b> adds internal solid ribs every N mm in "
             "both X and Y for extra rigidity (0 = no ribs).</i>"
         )
@@ -133,7 +136,7 @@ class HexLatticeDialog(QtWidgets.QDialog):
             "perim_width":      self.perim_spin.value(),
             # joint_width=None tells make_piece() to fall back to perim_width
             "joint_width":      joint_w if joint_w > 0.0 else None,
-            "joint_length":     self.joint_length_spin.value(),
+            "finger_spacing":   self.finger_spacing_spin.value(),
             # joint_depth=None tells make_piece() to fall back to joint_w/2
             "joint_depth":      joint_d if joint_d > 0.0 else None,
             "support_spacing":  self.support_spacing_spin.value(),

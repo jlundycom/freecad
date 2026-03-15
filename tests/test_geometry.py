@@ -2392,6 +2392,80 @@ class TestCenteredJointRange:
 
 
 # ===========================================================================
+# finger_spacing placement helper (pure arithmetic)
+# ===========================================================================
+
+class TestFingerSpacingPlacement:
+    """Tests for the finger-spacing placement arithmetic used inside
+    step_joint() and finger_joint().
+
+    Pure arithmetic — no FreeCAD dependency.
+    """
+
+    def _compute_positions(self, face_len, tab_w, finger_spacing):
+        """Mirror the finger-position logic from step_joint/finger_joint."""
+        if finger_spacing > 0.0:
+            period = tab_w + finger_spacing
+            n = max(1, int((face_len + finger_spacing) / period))
+            total = n * tab_w + (n - 1) * finger_spacing
+            margin = max(0.0, (face_len - total) * 0.5)
+            return [margin + i * period for i in range(n)]
+        else:
+            n = max(1, int(face_len / tab_w) + 1)
+            return [i * tab_w for i in range(n)]
+
+    def test_zero_spacing_fills_full_face(self):
+        """spacing=0 → contiguous fingers from 0 to face_len."""
+        # Formula: n = max(1, int(face_len / tab_w) + 1) = int(100/10)+1 = 11
+        pos = self._compute_positions(100.0, 10.0, 0.0)
+        assert len(pos) == 11
+        assert pos[0] == pytest.approx(0.0)
+        assert pos[1] == pytest.approx(10.0)
+
+    def test_spaced_fingers_count(self):
+        """spacing=20mm: for 100mm face with 10mm fingers → 4 fingers."""
+        # period = 30mm, n = int((100+20)/30) = 4
+        pos = self._compute_positions(100.0, 10.0, 20.0)
+        assert len(pos) == 4
+
+    def test_spaced_fingers_centred(self):
+        """Fingers must be symmetrically centred on the face."""
+        pos = self._compute_positions(100.0, 10.0, 20.0)
+        # total span = 4*10 + 3*20 = 100mm → margin = 0
+        margin = (100.0 - 100.0) * 0.5
+        assert margin == pytest.approx(0.0)
+        assert pos[0] == pytest.approx(0.0)
+        assert pos[-1] + 10.0 == pytest.approx(100.0)
+
+    def test_spaced_fingers_gap_is_correct(self):
+        """Gap between consecutive finger ends must equal finger_spacing."""
+        spacing = 15.0
+        tab_w   = 8.0
+        pos = self._compute_positions(80.0, tab_w, spacing)
+        for i in range(len(pos) - 1):
+            gap = pos[i + 1] - (pos[i] + tab_w)
+            assert gap == pytest.approx(spacing, abs=1e-9)
+
+    def test_single_finger_minimum(self):
+        """Even if the face is very small, at least one finger is placed."""
+        pos = self._compute_positions(5.0, 10.0, 20.0)
+        assert len(pos) >= 1
+
+    def test_fingers_dont_exceed_face_end(self):
+        """Last finger end must not exceed face_len (up to a small margin)."""
+        pos = self._compute_positions(100.0, 10.0, 20.0)
+        assert pos[-1] + 10.0 <= 100.0 + 1e-6
+
+    def test_period_equals_tab_plus_spacing(self):
+        """Adjacent finger starts must be separated by tab_w + spacing."""
+        tab_w   = 12.0
+        spacing = 18.0
+        pos = self._compute_positions(120.0, tab_w, spacing)
+        for i in range(len(pos) - 1):
+            assert pos[i + 1] - pos[i] == pytest.approx(tab_w + spacing, abs=1e-9)
+
+
+# ===========================================================================
 # make_piece defaults: joint_w and support_width None-default logic
 # ===========================================================================
 
@@ -2489,21 +2563,21 @@ class TestDialogParamKeys:
     def _simulate_get_params(
         self,
         perim=6.0,
-        joint_w_val=0.0,    # 0 → None (fall back to perim)
-        joint_l=0.0,
+        joint_w_val=0.0,        # 0 → None (fall back to perim)
+        finger_spacing_val=0.0,
         sup_spacing=0.0,
-        sup_w_val=0.0,      # 0 → None (fall back to joint_w)
+        sup_w_val=0.0,          # 0 → None (fall back to joint_w)
     ) -> dict:
         """Mirrors the get_params() logic in HexLatticeDialog."""
         joint_w = joint_w_val if joint_w_val > 0.0 else None
         sup_w   = sup_w_val   if sup_w_val   > 0.0 else None
         return {
             "width": 300.0, "length": 300.0, "height": 10.0,
-            "perim_width":     perim,
-            "joint_width":     joint_w,
-            "joint_length":    joint_l,
-            "support_spacing": sup_spacing,
-            "support_width":   sup_w,
+            "perim_width":      perim,
+            "joint_width":      joint_w,
+            "finger_spacing":   finger_spacing_val,
+            "support_spacing":  sup_spacing,
+            "support_width":    sup_w,
             "hex_size": 8.0, "wall_thickness": 1.5,
             "max_piece_size": 220.0, "lattice_type": "hexagonal",
         }
@@ -2528,13 +2602,15 @@ class TestDialogParamKeys:
         params = self._simulate_get_params(sup_w_val=3.0)
         assert params["support_width"] == pytest.approx(3.0)
 
-    def test_joint_length_zero_is_in_params_dict(self):
-        params = self._simulate_get_params(joint_l=0.0)
-        assert params["joint_length"] == pytest.approx(0.0)
+    def test_finger_spacing_zero_is_in_params_dict(self):
+        """finger_spacing=0 (contiguous) must be present in the dict."""
+        params = self._simulate_get_params(finger_spacing_val=0.0)
+        assert params["finger_spacing"] == pytest.approx(0.0)
 
-    def test_joint_length_nonzero_preserved(self):
-        params = self._simulate_get_params(joint_l=60.0)
-        assert params["joint_length"] == pytest.approx(60.0)
+    def test_finger_spacing_nonzero_preserved(self):
+        """A positive finger_spacing value must be passed through unchanged."""
+        params = self._simulate_get_params(finger_spacing_val=20.0)
+        assert params["finger_spacing"] == pytest.approx(20.0)
 
     def test_support_spacing_zero_is_in_params_dict(self):
         params = self._simulate_get_params(sup_spacing=0.0)
@@ -2545,9 +2621,9 @@ class TestDialogParamKeys:
         assert params["support_spacing"] == pytest.approx(50.0)
 
     def test_all_four_new_param_keys_present_in_dict(self):
-        """All four new parameter keys must be in the returned dict."""
+        """All four parameter keys must be in the returned dict."""
         params = self._simulate_get_params()
-        for key in ("joint_width", "joint_length",
+        for key in ("joint_width", "finger_spacing",
                     "support_spacing", "support_width"):
             assert key in params, f"Key {key!r} missing from get_params()"
 
@@ -2650,7 +2726,7 @@ class TestDialogJointDepthKey:
             "width": 300.0, "length": 300.0, "height": 10.0,
             "perim_width": 6.0,
             "joint_width":     joint_w if joint_w > 0.0 else None,
-            "joint_length":    0.0,
+            "finger_spacing":  0.0,
             "joint_depth":     joint_d,
             "support_spacing": 0.0,
             "support_width":   sup_w if sup_w > 0.0 else None,

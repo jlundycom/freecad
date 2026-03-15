@@ -1519,27 +1519,28 @@ def finger_joint(
     tab_w: float,
     tab_d: float,
     this_side: str,
-    joint_span: float = 0.0,
+    finger_spacing: float = 0.0,
 ) -> tuple:
     """Return (tabs, slots) lists of Part.Shape objects for one cut face.
 
     Parameters
     ----------
-    axis       : 'x' or 'y'  – axis *perpendicular* to the cut face
-    cut_pos    : coordinate of the cut plane along *axis*
-    face_start : start of the face range in the *parallel* axis
-    face_end   : end   of the face range in the *parallel* axis
-    height     : Z height of the part
-    tab_w      : finger width  (along the face)
-    tab_d      : finger depth  (into the adjacent piece); this is the *nominal*
-                 depth at the mid-height.  The actual depth is tapered:
-                 ``tab_d * (1 - TAPER_RATIO)`` at z = 0 (narrow / bottom),
-                 ``tab_d * (1 + TAPER_RATIO)`` at z = height (wide / top).
-    this_side  : 'left'|'right' for x-cuts; 'bottom'|'top' for y-cuts
-    joint_span : active length of the finger-joint zone along the face (mm).
-                 ``0`` (default) spans the full face.  When positive and
-                 smaller than the face length, equal solid margins are left on
-                 both sides — the finger-joint region is centred on the face.
+    axis            : 'x' or 'y'  – axis *perpendicular* to the cut face
+    cut_pos         : coordinate of the cut plane along *axis*
+    face_start      : start of the face range in the *parallel* axis
+    face_end        : end   of the face range in the *parallel* axis
+    height          : Z height of the part
+    tab_w           : finger width (along the face, mm)
+    tab_d           : finger depth (into the adjacent piece); this is the
+                      *nominal* depth at the mid-height.  The actual depth is
+                      tapered: ``tab_d * (1 - TAPER_RATIO)`` at z = 0
+                      (narrow / bottom), ``tab_d * (1 + TAPER_RATIO)`` at
+                      z = height (wide / top).
+    this_side       : 'left'|'right' for x-cuts; 'bottom'|'top' for y-cuts
+    finger_spacing  : gap between consecutive fingers (mm).  ``0`` (default)
+                      places fingers contiguously, filling the entire face.
+                      When positive, N fingers are centred on the face with
+                      *finger_spacing* flat zones between them.
     """
     import FreeCAD as App  # noqa: F401 – kept for completeness; used by helpers
     import Part             # noqa: F401
@@ -1557,22 +1558,30 @@ def finger_joint(
     # 'left'/'bottom' pieces: tabs at even finger positions (0, 2, 4 …)
     first_is_tab = this_side in ('left', 'bottom')
 
-    # Determine the active span of the joint on this face.  When joint_span > 0
-    # and smaller than the face length, the fingers are centred on the face and
-    # equal solid margins are left on each side for additional bearing strength.
-    loop_start, loop_end = _centered_joint_range(face_start, face_end, joint_span)
+    # Build the list of finger start positions.
+    # When finger_spacing == 0: fill the face contiguously (original behaviour).
+    # When finger_spacing  > 0: centre N discrete fingers on the face, each
+    #   separated by finger_spacing mm of flat (no-tab) material.
+    face_len = face_end - face_start
+    if finger_spacing > 0.0:
+        period = tab_w + finger_spacing
+        n_fingers = max(1, int((face_len + finger_spacing) / period))
+        total_span = n_fingers * tab_w + (n_fingers - 1) * finger_spacing
+        margin = max(0.0, (face_len - total_span) * 0.5)
+        finger_starts = [face_start + margin + i * period for i in range(n_fingers)]
+    else:
+        n_cont = max(1, int(face_len / tab_w) + 1)
+        finger_starts = [face_start + i * tab_w for i in range(n_cont)]
 
-    finger_idx = 0
-    pos        = loop_start
-
-    while pos < loop_end - 1e-6:
+    for finger_idx, pos in enumerate(finger_starts):
         seg_s = pos
-        seg_e = min(pos + tab_w, loop_end)
+        seg_e = min(pos + tab_w, face_end)
         seg_l = seg_e - seg_s
 
-        # Drop very short end segments (less than MIN_SEG_RATIO × tab_w)
+        # Skip (don't break) so that subsequent centred fingers within the
+        # face can still be placed even if this one clips the boundary.
         if seg_l < tab_w * MIN_SEG_RATIO:
-            break
+            continue
 
         is_tab = (finger_idx % 2 == 0) == first_is_tab
 
@@ -1655,9 +1664,6 @@ def finger_joint(
                     )
                 slots.append(s)
 
-        pos        += tab_w
-        finger_idx += 1
-
     return tabs, slots
 
 
@@ -1702,7 +1708,7 @@ def step_joint(
     tab_w: float,
     tab_d: float,
     this_side: str,
-    joint_span: float = 0.0,
+    finger_spacing: float = 0.0,
 ) -> tuple:
     """Return (tabs, slots) lists of Part.Shape objects for a stepped shelf joint.
 
@@ -1714,18 +1720,18 @@ def step_joint(
 
     Parameters
     ----------
-    axis       : 'x' or 'y' — axis *perpendicular* to the cut face
-    cut_pos    : coordinate of the cut plane along *axis*
-    face_start : start of the face range in the *parallel* axis
-    face_end   : end   of the face range in the *parallel* axis
-    height     : Z height of the part
-    tab_w      : finger width (along the face)
-    tab_d      : finger depth (into the adjacent piece)
-    this_side  : 'left'|'right' for x-cuts; 'bottom'|'top' for y-cuts
-    joint_span : active length of the finger-joint zone along the face (mm).
-                 ``0`` (default) spans the full face.  When positive and
-                 smaller than the face length, equal solid margins are left on
-                 both sides — centred on the face.
+    axis            : 'x' or 'y' — axis *perpendicular* to the cut face
+    cut_pos         : coordinate of the cut plane along *axis*
+    face_start      : start of the face range in the *parallel* axis
+    face_end        : end   of the face range in the *parallel* axis
+    height          : Z height of the part
+    tab_w           : finger width (along the face, mm)
+    tab_d           : finger depth (into the adjacent piece, mm)
+    this_side       : 'left'|'right' for x-cuts; 'bottom'|'top' for y-cuts
+    finger_spacing  : gap between consecutive fingers (mm).  ``0`` (default)
+                      places fingers contiguously, filling the entire face.
+                      When positive, N fingers are centred on the face with
+                      *finger_spacing* flat zones between them.
 
     Returns
     -------
@@ -1740,18 +1746,30 @@ def step_joint(
     tabs   = []
     slots  = []
 
-    loop_start, loop_end = _centered_joint_range(face_start, face_end, joint_span)
+    # Build the list of finger start positions.
+    # When finger_spacing == 0: fill the face contiguously (original behaviour).
+    # When finger_spacing  > 0: centre N discrete fingers on the face, each
+    #   separated by finger_spacing mm of flat (no-tab) material.
+    face_len = face_end - face_start
+    if finger_spacing > 0.0:
+        period = tab_w + finger_spacing
+        n_fingers = max(1, int((face_len + finger_spacing) / period))
+        total_span = n_fingers * tab_w + (n_fingers - 1) * finger_spacing
+        margin = max(0.0, (face_len - total_span) * 0.5)
+        finger_starts = [face_start + margin + i * period for i in range(n_fingers)]
+    else:
+        n_cont = max(1, int(face_len / tab_w) + 1)
+        finger_starts = [face_start + i * tab_w for i in range(n_cont)]
 
-    finger_idx = 0
-    pos        = loop_start
-
-    while pos < loop_end - 1e-6:
+    for finger_idx, pos in enumerate(finger_starts):
         seg_s = pos
-        seg_e = min(pos + tab_w, loop_end)
+        seg_e = min(pos + tab_w, face_end)
         seg_l = seg_e - seg_s
 
+        # Skip (don't break) so that subsequent centred fingers within the
+        # face can still be placed even if this one clips the boundary.
         if seg_l < tab_w * MIN_SEG_RATIO:
-            break
+            continue
 
         # Z extents for this finger (tab half and slot half)
         tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(
@@ -1803,9 +1821,6 @@ def step_joint(
                 slots.append(Part.makeBox(
                     face_s_l, sy1 - sy0, slt_z1 - slt_z0,
                     App.Vector(face_s_s, sy0, slt_z0)))
-
-        pos        += tab_w
-        finger_idx += 1
 
     return tabs, slots
 
@@ -1931,7 +1946,7 @@ def make_piece(
     leg_zones: list = (),
     lattice_type: str = "hexagonal",
     joint_w: float = None,
-    joint_length: float = 0.0,
+    finger_spacing: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
     joint_depth: float = None,
@@ -1974,11 +1989,11 @@ def make_piece(
                      band half-width at cut lines and the finger-joint tab
                      width (``tab_w = joint_w``).
                      Defaults to *perim_w* for backward compatibility.
-    joint_length   : active length of the finger-joint zone on each cut face
-                     (mm).  ``0`` (default) spans the full face so all existing
-                     behaviour is preserved.  When > 0 and smaller than the
-                     face dimension, equal solid margins are left on both ends,
-                     centring the finger joints on the face.
+    finger_spacing : gap between consecutive fingers (mm).  ``0`` (default)
+                     places fingers contiguously, filling the entire cut face.
+                     When > 0, N fingers are centred on the face with
+                     *finger_spacing* mm of flat (un-tabbed) material between
+                     them.
     support_spacing: spacing between interior support bars (mm).
                      ``0`` (default) disables support bars entirely.  When > 0,
                      solid bars of width *support_width* are fused at regular
@@ -2088,28 +2103,28 @@ def make_piece(
     if x0 > 1e-6 and xj_y1 > xj_y0 + _GEOM_EPS:
         tabs, slots = _joint_fn('x', x0, xj_y0, xj_y1,
                                 height, tab_w, tab_d, 'right',
-                                joint_span=joint_length)
+                                finger_spacing=finger_spacing)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Right face (x = x1): this piece is to the LEFT of that cut
     if x1 < total_w - 1e-6 and xj_y1 > xj_y0 + _GEOM_EPS:
         tabs, slots = _joint_fn('x', x1, xj_y0, xj_y1,
                                 height, tab_w, tab_d, 'left',
-                                joint_span=joint_length)
+                                finger_spacing=finger_spacing)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Bottom face (y = y0): this piece is ABOVE (top side of) that cut
     if y0 > 1e-6:
         tabs, slots = _joint_fn('y', y0, x0, x1,
                                 height, tab_w, tab_d, 'top',
-                                joint_span=joint_length)
+                                finger_spacing=finger_spacing)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Top face (y = y1): this piece is BELOW (bottom side of) that cut
     if y1 < total_l - 1e-6:
         tabs, slots = _joint_fn('y', y1, x0, x1,
                                 height, tab_w, tab_d, 'bottom',
-                                joint_span=joint_length)
+                                finger_spacing=finger_spacing)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     return body
@@ -2265,7 +2280,7 @@ def create_all_pieces(
     max_piece_size: float = MAX_PIECE_SIZE,
     lattice_type: str = "hexagonal",
     joint_width: float = None,
-    joint_length: float = 0.0,
+    finger_spacing: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
     joint_depth: float = None,
@@ -2291,8 +2306,10 @@ def create_all_pieces(
     joint_width           : **inner** joint / bridge width (mm).  Controls the
                             bridge-band width at cut lines and the finger-joint
                             tab width.  Defaults to *perim_width*.
-    joint_length          : active length of the finger-joint zone per cut face
-                            (mm).  ``0`` (default) spans the full face.
+    finger_spacing        : gap between consecutive fingers (mm).  ``0``
+                            (default) places fingers contiguously (full face).
+                            When > 0, N centred fingers are placed with
+                            *finger_spacing* flat gaps between them.
     support_spacing       : spacing between interior support bars (mm).
                             ``0`` (default) disables support bars.
     support_width         : full width of each interior support bar (mm).
@@ -2329,7 +2346,7 @@ def create_all_pieces(
                 x_cuts, y_cuts,
                 lattice_type=lattice_type,
                 joint_w=joint_width,
-                joint_length=joint_length,
+                finger_spacing=finger_spacing,
                 support_spacing=support_spacing,
                 support_width=support_width,
                 joint_depth=joint_depth,
@@ -2352,7 +2369,7 @@ def create_shelf_with_legs(
     leg_width: float = 20.0,
     lattice_type: str = "hexagonal",
     joint_width: float = None,
-    joint_length: float = 0.0,
+    finger_spacing: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
     joint_depth: float = None,
@@ -2395,8 +2412,10 @@ def create_shelf_with_legs(
     joint_width           : **inner** joint / bridge width (mm).  Controls the
                             bridge-band width at cut lines and the finger-joint
                             tab width.  Defaults to *perim_width*.
-    joint_length          : active length of the finger-joint zone per cut face
-                            (mm).  ``0`` (default) spans the full face.
+    finger_spacing        : gap between consecutive fingers (mm).  ``0``
+                            (default) places fingers contiguously (full face).
+                            When > 0, N centred fingers are placed with
+                            *finger_spacing* flat gaps between them.
     support_spacing       : spacing between interior support bars (mm).
                             ``0`` (default) disables support bars.
     support_width         : full width of each interior support bar (mm).
@@ -2496,7 +2515,7 @@ def create_shelf_with_legs(
                 leg_zones=leg_zones,
                 lattice_type=lattice_type,
                 joint_w=joint_width,
-                joint_length=joint_length,
+                finger_spacing=finger_spacing,
                 support_spacing=support_spacing,
                 support_width=support_width,
                 joint_depth=joint_depth,
