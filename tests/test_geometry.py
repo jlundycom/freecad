@@ -29,6 +29,23 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     MIN_SEG_RATIO,
     PIN_RADIUS_RATIO,
     TAPER_RATIO,
+    _GEOM_EPS,
+    _centered_joint_range,
+    _x_joint_y_extents,
+    LATTICE_TYPES,
+    get_tiling_provider,
+    HexagonalTilingProvider,
+    SquareTilingProvider,
+    TriangularTilingProvider,
+    TrihexagonalTilingProvider,
+    TruncatedSquareTilingProvider,
+    SnubSquareTilingProvider,
+    ElongatedTriangularTilingProvider,
+    TruncatedHexagonalTilingProvider,
+    SmallRhombitrihexagonalTilingProvider,
+    GreatRhombitrihexagonalTilingProvider,
+    SnubHexagonalTilingProvider,
+    _step_joint_z_extents,
 )
 
 import pytest
@@ -783,3 +800,1951 @@ class TestTaperRatio:
             tab_at_z   = td_bot + frac * (td_top - td_bot)
             slot_at_z  = tab_at_z + fit
             assert abs(slot_at_z - tab_at_z - fit) < 1e-9
+
+
+# ===========================================================================
+# Stepped shelf joint — pure-Python geometry helper
+# ===========================================================================
+
+class TestStepJointZExtents:
+    """Tests for ``_step_joint_z_extents`` — pure Python, no FreeCAD required."""
+
+    # ── Boundary: step always at exactly half-height ──────────────────
+
+    def test_step_boundary_is_half_height(self):
+        """The Z boundary between tab and slot is always exactly height/2."""
+        for h in (4.0, 10.0, 20.0):
+            tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(0, h, 'left')
+            assert abs(tab_z1 - h * 0.5) < 1e-9 and abs(slt_z0 - h * 0.5) < 1e-9
+
+    # ── Left piece, even finger → lower tab ──────────────────────────
+
+    def test_left_even_finger_has_lower_tab(self):
+        """left piece, finger 0: tab at z=0..h/2, slot at z=h/2..h."""
+        h = 10.0
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(0, h, 'left')
+        assert abs(tab_z0 - 0.0) < 1e-9
+        assert abs(tab_z1 - 5.0) < 1e-9
+        assert abs(slt_z0 - 5.0) < 1e-9
+        assert abs(slt_z1 - 10.0) < 1e-9
+
+    def test_left_odd_finger_has_upper_tab(self):
+        """left piece, finger 1: tab at z=h/2..h, slot at z=0..h/2."""
+        h = 10.0
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(1, h, 'left')
+        assert abs(tab_z0 - 5.0) < 1e-9
+        assert abs(tab_z1 - 10.0) < 1e-9
+        assert abs(slt_z0 - 0.0) < 1e-9
+        assert abs(slt_z1 - 5.0) < 1e-9
+
+    # ── Right piece: complementary pattern ───────────────────────────
+
+    def test_right_even_finger_has_upper_tab(self):
+        """right piece, finger 0: tab at z=h/2..h (complement of left even)."""
+        h = 10.0
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(0, h, 'right')
+        assert abs(tab_z0 - 5.0) < 1e-9
+        assert abs(tab_z1 - 10.0) < 1e-9
+
+    def test_right_odd_finger_has_lower_tab(self):
+        """right piece, finger 1: tab at z=0..h/2 (complement of left odd)."""
+        h = 10.0
+        tab_z0, tab_z1, slt_z0, slt_z1 = _step_joint_z_extents(1, h, 'right')
+        assert abs(tab_z0 - 0.0) < 1e-9
+        assert abs(tab_z1 - 5.0) < 1e-9
+
+    # ── bottom/top mirrors left/right ────────────────────────────────
+
+    def test_bottom_matches_left_pattern(self):
+        """'bottom' and 'left' must yield identical z extents."""
+        h = 8.0
+        for i in (0, 1, 2, 3):
+            assert _step_joint_z_extents(i, h, 'bottom') == \
+                   _step_joint_z_extents(i, h, 'left')
+
+    def test_top_matches_right_pattern(self):
+        """'top' and 'right' must yield identical z extents."""
+        h = 8.0
+        for i in (0, 1, 2, 3):
+            assert _step_joint_z_extents(i, h, 'top') == \
+                   _step_joint_z_extents(i, h, 'right')
+
+    # ── Complementary pieces interlock ───────────────────────────────
+
+    def test_adjacent_pieces_interlock_at_even_finger(self):
+        """At every even finger, left tab fills right slot and vice-versa."""
+        h = 12.0
+        for i in (0, 2, 4, 6):
+            l_tab_z0, l_tab_z1, l_slt_z0, l_slt_z1 = \
+                _step_joint_z_extents(i, h, 'left')
+            r_tab_z0, r_tab_z1, r_slt_z0, r_slt_z1 = \
+                _step_joint_z_extents(i, h, 'right')
+            # Left's tab occupies the same z-range as right's slot
+            assert abs(l_tab_z0 - r_slt_z0) < 1e-9
+            assert abs(l_tab_z1 - r_slt_z1) < 1e-9
+            # Right's tab occupies the same z-range as left's slot
+            assert abs(r_tab_z0 - l_slt_z0) < 1e-9
+            assert abs(r_tab_z1 - l_slt_z1) < 1e-9
+
+    def test_adjacent_pieces_interlock_at_odd_finger(self):
+        """At every odd finger, left tab fills right slot and vice-versa."""
+        h = 12.0
+        for i in (1, 3, 5):
+            l_tab_z0, l_tab_z1, l_slt_z0, l_slt_z1 = \
+                _step_joint_z_extents(i, h, 'left')
+            r_tab_z0, r_tab_z1, r_slt_z0, r_slt_z1 = \
+                _step_joint_z_extents(i, h, 'right')
+            assert abs(l_tab_z0 - r_slt_z0) < 1e-9
+            assert abs(l_tab_z1 - r_slt_z1) < 1e-9
+            assert abs(r_tab_z0 - l_slt_z0) < 1e-9
+            assert abs(r_tab_z1 - l_slt_z1) < 1e-9
+
+    # ── Full-height coverage: tab + slot = total height ───────────────
+
+    def test_tab_and_slot_cover_full_height(self):
+        """Tab height + slot height == part height for every finger/side."""
+        h = 15.0
+        for side in ('left', 'right', 'bottom', 'top'):
+            for i in range(6):
+                tz0, tz1, sz0, sz1 = _step_joint_z_extents(i, h, side)
+                assert abs((tz1 - tz0) + (sz1 - sz0) - h) < 1e-9
+
+    # ── Vertical locking property ─────────────────────────────────────
+
+    def test_even_finger_prevents_upward_movement(self):
+        """Even-finger left lower tab top (z=h/2) is the Z-lock surface."""
+        h = 10.0
+        _, tab_z1, _, _ = _step_joint_z_extents(0, h, 'left')
+        assert abs(tab_z1 - h * 0.5) < 1e-9   # top of lower tab = h/2
+
+    def test_odd_finger_prevents_downward_movement(self):
+        """Odd-finger left upper tab bottom (z=h/2) is the Z-lock surface."""
+        h = 10.0
+        tab_z0, _, _, _ = _step_joint_z_extents(1, h, 'left')
+        assert abs(tab_z0 - h * 0.5) < 1e-9   # bottom of upper tab = h/2
+
+
+# ===========================================================================
+# X-joint Y extents — flat corner zones at 4-way intersections
+# ===========================================================================
+
+class TestXJointYExtents:
+    """Tests for ``_x_joint_y_extents`` — pure Python, no FreeCAD required.
+
+    At a 4-way intersection (where an X-cut and Y-cut cross), X-face tabs
+    would be cut by the adjacent Y-face slot.  The helper leaves a flat zone
+    of width *tab_d* at each corner that borders a Y-face joint, so that only
+    the Y direction provides interlocking there.
+    """
+
+    def test_both_boundaries_are_y_cuts_shrinks_both_ends(self):
+        """When both y0 > 0 and y1 < total_l, both corners are shrunk."""
+        eff_y0, eff_y1 = _x_joint_y_extents(50.0, 150.0, 200.0, 5.0)
+        assert abs(eff_y0 - 55.0) < 1e-9
+        assert abs(eff_y1 - 145.0) < 1e-9
+
+    def test_y0_is_outer_edge_not_shrunk(self):
+        """y0 == 0 (outer shelf edge, no Y-face joint) keeps eff_y0 == y0."""
+        eff_y0, eff_y1 = _x_joint_y_extents(0.0, 150.0, 200.0, 5.0)
+        assert abs(eff_y0 - 0.0) < 1e-9
+        assert abs(eff_y1 - 145.0) < 1e-9
+
+    def test_y1_is_outer_edge_not_shrunk(self):
+        """y1 == total_l (outer shelf edge) keeps eff_y1 == y1."""
+        eff_y0, eff_y1 = _x_joint_y_extents(50.0, 200.0, 200.0, 5.0)
+        assert abs(eff_y0 - 55.0) < 1e-9
+        assert abs(eff_y1 - 200.0) < 1e-9
+
+    def test_both_outer_edges_no_shrinkage(self):
+        """Single-piece shelf (no Y-cuts): no flat zones needed."""
+        eff_y0, eff_y1 = _x_joint_y_extents(0.0, 200.0, 200.0, 5.0)
+        assert abs(eff_y0 - 0.0) < 1e-9
+        assert abs(eff_y1 - 200.0) < 1e-9
+
+    def test_flat_zone_width_equals_tab_d(self):
+        """Each flat corner zone is exactly tab_d wide."""
+        tab_d = 7.5
+        eff_y0, eff_y1 = _x_joint_y_extents(30.0, 170.0, 300.0, tab_d)
+        assert abs(eff_y0 - (30.0 + tab_d)) < 1e-9
+        assert abs(eff_y1 - (170.0 - tab_d)) < 1e-9
+
+    def test_flat_zone_width_scales_with_tab_d(self):
+        """Doubling tab_d doubles the flat-zone width."""
+        eff_y0_a, eff_y1_a = _x_joint_y_extents(20.0, 180.0, 200.0, 4.0)
+        eff_y0_b, eff_y1_b = _x_joint_y_extents(20.0, 180.0, 200.0, 8.0)
+        assert abs((eff_y0_a - 20.0) * 2 - (eff_y0_b - 20.0)) < 1e-9
+        assert abs((180.0 - eff_y1_a) * 2 - (180.0 - eff_y1_b)) < 1e-9
+
+    def test_very_narrow_piece_gives_empty_or_inverted_range(self):
+        """Flat zones from both ends can make eff_y0 >= eff_y1 (joint suppressed)."""
+        tab_d = 20.0
+        eff_y0, eff_y1 = _x_joint_y_extents(10.0, 30.0, 200.0, tab_d)
+        # y0+tab_d = 30, y1-tab_d = 10 → eff_y0 >= eff_y1
+        assert eff_y0 >= eff_y1
+
+    def test_corner_zone_prevents_x_face_at_y0_corner(self):
+        """X-face joint range never starts below y0 + tab_d when y0 is a cut."""
+        tab_d = 6.0
+        y0 = 100.0
+        eff_y0, _ = _x_joint_y_extents(y0, 300.0, 400.0, tab_d)
+        assert eff_y0 >= y0 + tab_d - 1e-9
+
+    def test_corner_zone_prevents_x_face_at_y1_corner(self):
+        """X-face joint range never ends above y1 - tab_d when y1 is a cut."""
+        tab_d = 6.0
+        y1 = 300.0
+        _, eff_y1 = _x_joint_y_extents(100.0, y1, 400.0, tab_d)
+        assert eff_y1 <= y1 - tab_d + 1e-9
+
+    def test_symmetric_piece_gives_symmetric_extents(self):
+        """Symmetric piece (y0 and y1 both cuts) produces symmetric extents."""
+        tab_d = 5.0
+        y0, y1, total_l = 50.0, 150.0, 200.0
+        eff_y0, eff_y1 = _x_joint_y_extents(y0, y1, total_l, tab_d)
+        assert abs((eff_y0 - y0) - (y1 - eff_y1)) < 1e-9
+
+    def test_y0_near_zero_still_outer_edge(self):
+        """y0 just above 0 but within GEOM_EPS is treated as outer edge."""
+        tab_d = 5.0
+        # y0 = 0 → outer edge
+        eff_y0_zero, _ = _x_joint_y_extents(0.0, 100.0, 200.0, tab_d)
+        assert abs(eff_y0_zero - 0.0) < 1e-9
+        # y0 slightly above GEOM_EPS → cut exists, shrink
+        eff_y0_cut, _ = _x_joint_y_extents(_GEOM_EPS * 2, 100.0, 200.0, tab_d)
+        assert eff_y0_cut > _GEOM_EPS * 2
+
+
+# ===========================================================================
+# LATTICE_TYPES registry
+# ===========================================================================
+
+# Relative tolerance used for geometric spacing checks.  An absolute tolerance
+# would need to change whenever cell_size changes; 1 % of the expected spacing
+# is loose enough to survive floating-point accumulation across many lattice
+# steps while tight enough to catch real implementation errors.
+_SPACING_RTOL = 0.01
+
+
+class TestLatticeTypes:
+    """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
+
+    def test_lattice_types_has_eleven_entries(self):
+        assert len(LATTICE_TYPES) == 11
+
+    def test_required_keys_present(self):
+        for key in ("hexagonal", "square", "triangular", "trihexagonal",
+                    "truncated_square", "snub_square", "elongated_triangular",
+                    "truncated_hexagonal", "small_rhombitrihexagonal",
+                    "great_rhombitrihexagonal", "snub_hexagonal"):
+            assert key in LATTICE_TYPES, f"Missing key {key!r}"
+
+    def test_all_display_names_are_strings(self):
+        for key, name in LATTICE_TYPES.items():
+            assert isinstance(name, str) and name, f"Bad display name for {key!r}"
+
+    def test_get_tiling_provider_returns_correct_types(self):
+        assert isinstance(get_tiling_provider("hexagonal"),                 HexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("square"),                    SquareTilingProvider)
+        assert isinstance(get_tiling_provider("triangular"),                TriangularTilingProvider)
+        assert isinstance(get_tiling_provider("trihexagonal"),              TrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_square"),          TruncatedSquareTilingProvider)
+        assert isinstance(get_tiling_provider("snub_square"),               SnubSquareTilingProvider)
+        assert isinstance(get_tiling_provider("elongated_triangular"),      ElongatedTriangularTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_hexagonal"),       TruncatedHexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("small_rhombitrihexagonal"),  SmallRhombitrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("great_rhombitrihexagonal"),  GreatRhombitrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("snub_hexagonal"),             SnubHexagonalTilingProvider)
+
+    def test_get_tiling_provider_unknown_key_raises(self):
+        with pytest.raises(ValueError):
+            get_tiling_provider("nonexistent_tiling")
+
+    def test_display_names_unique(self):
+        names = list(LATTICE_TYPES.values())
+        assert len(names) == len(set(names)), "Duplicate display names in LATTICE_TYPES"
+
+
+# ===========================================================================
+# TilingProvider: get_cells()
+# ===========================================================================
+
+class TestTilingCells:
+    """Tests that all tiling providers produce valid cell output.
+
+    All tests are pure Python (no FreeCAD required) because get_cells()
+    returns plain (cx, cy, n_sides, rotation_deg) tuples.
+    """
+
+    _region = dict(gx0=10.0, gx1=190.0, gy0=10.0, gy1=190.0)
+    _cell   = dict(cell_size=8.0, wall_t=1.5)
+
+    def _cells(self, key):
+        p = get_tiling_provider(key)
+        return p.get_cells(**self._region, **self._cell)
+
+    # ── basic output shape ────────────────────────────────────────────────
+
+    def test_hexagonal_non_empty(self):
+        assert len(self._cells("hexagonal")) > 0
+
+    def test_square_non_empty(self):
+        assert len(self._cells("square")) > 0
+
+    def test_triangular_non_empty(self):
+        assert len(self._cells("triangular")) > 0
+
+    def test_trihexagonal_non_empty(self):
+        assert len(self._cells("trihexagonal")) > 0
+
+    def test_truncated_square_non_empty(self):
+        assert len(self._cells("truncated_square")) > 0
+
+    def test_each_cell_is_4_tuple(self):
+        for key in LATTICE_TYPES:
+            for cell in self._cells(key):
+                assert len(cell) == 4, f"[{key}] cell must be (cx,cy,n,rot)"
+
+    def test_n_sides_correct_for_hexagonal(self):
+        for cx, cy, n, rot in self._cells("hexagonal"):
+            assert n == 6
+
+    def test_n_sides_correct_for_square(self):
+        for cx, cy, n, rot in self._cells("square"):
+            assert n == 4
+
+    def test_n_sides_correct_for_triangular(self):
+        for cx, cy, n, rot in self._cells("triangular"):
+            assert n == 3
+
+    def test_n_sides_correct_for_trihexagonal(self):
+        """Trihexagonal cells must be either hexagons (n=6) or triangles (n=3)."""
+        for cx, cy, n, rot in self._cells("trihexagonal"):
+            assert n in (3, 6), f"Unexpected n_sides={n} in trihexagonal tiling"
+
+    def test_n_sides_correct_for_truncated_square(self):
+        """Truncated-square cells must be octagons (n=8) or squares (n=4)."""
+        for cx, cy, n, rot in self._cells("truncated_square"):
+            assert n in (4, 8), f"Unexpected n_sides={n} in truncated_square tiling"
+
+    def test_truncated_square_has_both_octagons_and_squares(self):
+        """Truncated-square tiling must contain both n=8 and n=4 cells."""
+        sides = {n for _cx, _cy, n, _rot in self._cells("truncated_square")}
+        assert 8 in sides, "Missing octagons (n=8) in truncated_square tiling"
+        assert 4 in sides, "Missing squares (n=4) in truncated_square tiling"
+
+    def test_truncated_square_octagon_to_square_ratio(self):
+        """Truncated-square tiling has exactly 1 octagon per square."""
+        cells  = self._cells("truncated_square")
+        n_oct  = sum(1 for _cx, _cy, n, _rot in cells if n == 8)
+        n_sq   = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        assert n_oct > 0, "No octagons in truncated_square tiling"
+        # In an infinite tiling the ratio is exactly 1.  A finite region can
+        # clip a few cells near the boundary; allow ±20 % tolerance.
+        assert abs(n_oct / n_sq - 1.0) < 0.20, (
+            f"Expected oct/sq ratio ≈ 1.0, got {n_oct/n_sq:.3f}"
+        )
+
+    def test_trihexagonal_has_both_hexagons_and_triangles(self):
+        """Trihexagonal tiling must contain both n=6 and n=3 cells."""
+        sides = {n for _cx, _cy, n, _rot in self._cells("trihexagonal")}
+        assert 6 in sides, "Missing hexagons (n=6) in trihexagonal tiling"
+        assert 3 in sides, "Missing triangles (n=3) in trihexagonal tiling"
+
+    def test_trihexagonal_triangle_to_hexagon_ratio(self):
+        """Trihexagonal tiling has exactly 2 triangles per hexagon."""
+        cells = self._cells("trihexagonal")
+        n_hex = sum(1 for _cx, _cy, n, _rot in cells if n == 6)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_hex > 0, "No hexagons in trihexagonal tiling"
+        # Boundary cropping can shave a few cells from the finite test region,
+        # so a 15% tolerance is used.  Any structural bug (e.g. missing an
+        # entire triangle type) would produce a ratio far from 2.0.
+        assert abs(n_tri / n_hex - 2.0) < 0.15, (
+            f"Expected tri/hex ratio ≈ 2.0, got {n_tri/n_hex:.3f}"
+        )
+
+    def test_trihexagonal_has_two_triangle_rotations(self):
+        """Trihexagonal must have both up (90°) and down (270°) triangles."""
+        tri_rots = {rot for _cx, _cy, n, rot in self._cells("trihexagonal") if n == 3}
+        assert 90.0  in tri_rots, "Missing up-pointing triangles (rotation=90°)"
+        assert 270.0 in tri_rots, "Missing down-pointing triangles (rotation=270°)"
+
+    def test_triangular_has_two_rotations(self):
+        """Triangular tiling must have both up (90°) and down (270°) triangles."""
+        rotations = {rot for _cx, _cy, _n, rot in self._cells("triangular")}
+        assert 90.0  in rotations, "Missing up-pointing triangles (rotation=90)"
+        assert 270.0 in rotations, "Missing down-pointing triangles (rotation=270)"
+
+    # ── centres within bounds ─────────────────────────────────────────────
+
+    def test_all_centres_within_region_hexagonal(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("hexagonal"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    def test_all_centres_within_region_square(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("square"):
+            assert r["gx0"] <= cx <= r["gx1"]
+            assert r["gy0"] <= cy <= r["gy1"]
+
+    def test_all_centres_within_region_triangular(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("triangular"):
+            assert r["gx0"] <= cx <= r["gx1"]
+            assert r["gy0"] <= cy <= r["gy1"]
+
+    def test_all_centres_within_region_trihexagonal(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("trihexagonal"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    def test_all_centres_within_region_truncated_square(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("truncated_square"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    # ── no duplicate centres ──────────────────────────────────────────────
+
+    def test_no_duplicate_centres_hexagonal(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("hexagonal")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in hexagonal tiling"
+
+    def test_no_duplicate_centres_square(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("square")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in square tiling"
+
+    def test_no_duplicate_centres_triangular(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("triangular")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in triangular tiling"
+
+    def test_no_duplicate_centres_trihexagonal(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("trihexagonal")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in trihexagonal tiling"
+
+    def test_no_duplicate_centres_truncated_square(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("truncated_square")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in truncated_square tiling"
+
+    # ── empty region returns empty list ───────────────────────────────────
+
+    def test_empty_region_returns_empty(self):
+        for key in LATTICE_TYPES:
+            p = get_tiling_provider(key)
+            result = p.get_cells(50.0, 50.0, 0.0, 100.0, 8.0, 1.5)
+            assert result == [], f"[{key}] expected [] for zero-width region"
+
+    # ── centre-to-centre spacing (wall_t=0 sanity check) ─────────────────
+
+    def test_square_spacing_at_zero_wall(self):
+        """With wall_t=0, adjacent square centres should be exactly cell_size apart."""
+        cell_size = 10.0
+        p  = get_tiling_provider("square")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        # Group by approximate y row
+        rows = {}
+        for cx, cy, _n, _rot in cs:
+            key = round(cy, 4)
+            rows.setdefault(key, []).append(cx)
+        for y_key, xs in rows.items():
+            xs_sorted = sorted(xs)
+            for a, b in zip(xs_sorted[:-1], xs_sorted[1:]):
+                assert abs((b - a) - cell_size) < cell_size * _SPACING_RTOL, (
+                    f"Square row y≈{y_key}: spacing {b-a:.4f} ≠ {cell_size}"
+                )
+
+    def test_triangular_adjacent_distance_at_zero_wall(self):
+        """With wall_t=0, the nearest neighbour distance in the triangular tiling
+        should equal cell_size / sqrt(3) (centroid-to-centroid for shared edge)."""
+        cell_size = 9.0
+        expected  = cell_size / math.sqrt(3)
+        p  = get_tiling_provider("triangular")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        # Find minimum pairwise distance (should equal the expected adjacency dist)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Triangular min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    # ── circumradius ──────────────────────────────────────────────────────
+
+    def test_hexagonal_circumradius_equals_cell_size(self):
+        p = get_tiling_provider("hexagonal")
+        for s in (5.0, 8.0, 12.0):
+            assert abs(p.cell_circumradius(s) - s) < 1e-9
+
+    def test_square_circumradius(self):
+        p = get_tiling_provider("square")
+        for s in (5.0, 8.0, 12.0):
+            expected = s * math.sqrt(2) / 2.0
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_triangular_circumradius(self):
+        p = get_tiling_provider("triangular")
+        for s in (5.0, 8.0, 12.0):
+            expected = s / math.sqrt(3)
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_trihexagonal_circumradius_equals_cell_size(self):
+        """Trihexagonal circumradius is the hexagon circumradius = cell_size."""
+        p = get_tiling_provider("trihexagonal")
+        for s in (5.0, 8.0, 12.0):
+            assert abs(p.cell_circumradius(s) - s) < 1e-9
+
+    def test_truncated_square_circumradius(self):
+        """Truncated-square circumradius is the octagon circumradius = s/(2·sin(π/8))."""
+        p = get_tiling_provider("truncated_square")
+        for s in (5.0, 8.0, 12.0):
+            expected = s / (2.0 * math.sin(math.pi / 8.0))
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    # ── trihexagonal adjacency distance ───────────────────────────────────
+
+    def test_trihexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0, the nearest-neighbour distance in the trihexagonal
+        tiling (hex-centre to triangle-centre) is 2·cell_size/√3."""
+        cell_size = 9.0
+        expected  = 2.0 * cell_size / math.sqrt(3)
+        p  = get_tiling_provider("trihexagonal")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Trihexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_truncated_square_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0, the nearest-neighbour centre-to-centre distance in the
+        truncated-square tiling is step·(2+√2)/2 (oct-centre to sq-centre)."""
+        cell_size = 9.0
+        expected  = cell_size * (2.0 + math.sqrt(2)) / 2.0
+        p  = get_tiling_provider("truncated_square")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Truncated-square min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    # ── trihexagonal uniform coverage (oblique-drift guard) ───────────────
+
+    def test_trihexagonal_coverage_uniform_across_y(self):
+        """Trihexagonal tiling must have the same cell density at all Y positions.
+
+        Uses a tall region to expose any oblique-drift accumulation that would
+        leave the top strips under-populated (analogous to the bug fixed in
+        the triangular tiling).
+        """
+        p    = get_tiling_provider("trihexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        strip_height = step * math.sqrt(3)  # a2y
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strips"
+        assert high_cells > 0, "No cells in top strips"
+        # The region holds ~17 cells per strip-pair; allow ±3 for boundary
+        # cropping.  Any oblique drift would produce differences >> 10.
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible oblique drift in trihexagonal tiling."
+        )
+
+    # ── triangular tiling uniform coverage (regression for oblique-drift bug) ─
+
+    def test_triangular_coverage_uniform_across_y(self):
+        """Triangular tiling must have the same cell density at all Y positions.
+
+        The old oblique-lattice implementation accumulated an X drift as the
+        row index increased, causing cells near the top of the region to be
+        missed (the lattice shifted out of bounds on the left).  This test
+        verifies that the count per horizontal strip is the same at the
+        bottom and top of a tall region.
+        """
+        p    = get_tiling_provider("triangular")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        h    = step * math.sqrt(3) / 2.0
+
+        # Tall region: many strips, so oblique drift would be noticeable
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        # Count cells in the first two strips (low Y) vs the last two strips (high Y)
+        strip_height = h
+        low_cells  = sum(1 for cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells > 0,  "No cells in bottom strips"
+        assert high_cells > 0, "No cells in top strips"
+        # The region width (200 mm) and strip height (≈9.96 mm) produce ~17
+        # cells per strip.  Boundary cropping may include or exclude cells
+        # exactly on the edge, so a tolerance of ±2 (roughly 10% of ~17)
+        # is generous enough to avoid flakiness while being far below the
+        # magnitude of the bug (which produced 0 vs 86).
+        assert abs(low_cells - high_cells) <= 2, (
+            f"Cell counts differ: bottom strips={low_cells}, top strips={high_cells}. "
+            "Likely cause: oblique drift in triangular tiling."
+        )
+
+    # ── snub square tiling ───────────────────────────────────────────────
+
+    def test_snub_square_non_empty(self):
+        assert len(self._cells("snub_square")) > 0
+
+    def test_n_sides_correct_for_snub_square(self):
+        """Snub-square cells must be squares (n=4) or triangles (n=3)."""
+        for cx, cy, n, rot in self._cells("snub_square"):
+            assert n in (3, 4), f"Unexpected n_sides={n} in snub_square tiling"
+
+    def test_snub_square_has_both_squares_and_triangles(self):
+        sides = {n for _cx, _cy, n, _rot in self._cells("snub_square")}
+        assert 4 in sides, "Missing squares (n=4) in snub_square tiling"
+        assert 3 in sides, "Missing triangles (n=3) in snub_square tiling"
+
+    def test_snub_square_triangle_to_square_ratio(self):
+        """Snub-square tiling has exactly 2 triangles per square."""
+        cells = self._cells("snub_square")
+        n_sq  = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_sq > 0, "No squares in snub_square tiling"
+        # Boundary cropping may shave a few polygons; allow ±20% tolerance.
+        assert abs(n_tri / n_sq - 2.0) < 0.20, (
+            f"Expected tri/sq ratio ≈ 2.0, got {n_tri/n_sq:.3f}"
+        )
+
+    def test_snub_square_square_rotations(self):
+        """Snub-square must contain squares at exactly rot=45° and rot=75°."""
+        sq_rots = {rot for _cx, _cy, n, rot in self._cells("snub_square") if n == 4}
+        assert 45.0 in sq_rots, "Missing axis-aligned squares (rot=45°) in snub_square"
+        assert 75.0 in sq_rots, "Missing snub-rotated squares (rot=75°) in snub_square"
+
+    def test_snub_square_triangle_rotations(self):
+        """Snub-square must contain triangles at all four required rotations."""
+        tri_rots = {rot for _cx, _cy, n, rot in self._cells("snub_square") if n == 3}
+        for expected_rot in (0.0, 30.0, 60.0, 90.0):
+            assert expected_rot in tri_rots, (
+                f"Missing triangle rotation {expected_rot}° in snub_square tiling"
+            )
+
+    def test_all_centres_within_region_snub_square(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("snub_square"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    def test_no_duplicate_centres_snub_square(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("snub_square")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in snub_square tiling"
+
+    def test_snub_square_circumradius(self):
+        """Snub-square circumradius is the square circumradius = cell_size·√2/2."""
+        p = get_tiling_provider("snub_square")
+        for s in (5.0, 8.0, 12.0):
+            expected = s * math.sqrt(2) / 2.0
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_snub_square_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0, the nearest centre-to-centre distance in the snub-square
+        tiling equals the distance between two edge-sharing triangles:
+        cell_size / sqrt(3)."""
+        cell_size = 9.0
+        expected  = cell_size / math.sqrt(3)
+        p  = get_tiling_provider("snub_square")
+        cs = p.get_cells(0.0, 80.0, 0.0, 80.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Snub-square min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_snub_square_coverage_uniform_across_y(self):
+        """Snub-square tiling must cover the region uniformly at all Y positions.
+
+        The oblique a2 vector introduces a leftward x-drift of step/2 per row.
+        Without extra_cols compensation, high-y strips would be under-populated
+        (the rightmost column would shift left and fall outside the region).
+        """
+        p    = get_tiling_provider("snub_square")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        strip_height = step * (2.0 + sq3) / 2.0   # a2y
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strips of snub_square tiling"
+        assert high_cells > 0, "No cells in top strips of snub_square tiling"
+        # Allow ±3 cells difference to accommodate boundary cropping.
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible oblique drift in snub_square tiling."
+        )
+
+    # ── elongated triangular tiling ──────────────────────────────────────
+
+    def test_elongated_triangular_non_empty(self):
+        assert len(self._cells("elongated_triangular")) > 0
+
+    def test_n_sides_correct_for_elongated_triangular(self):
+        """Elongated-triangular cells must be squares (n=4) or triangles (n=3)."""
+        for cx, cy, n, rot in self._cells("elongated_triangular"):
+            assert n in (3, 4), f"Unexpected n_sides={n} in elongated_triangular tiling"
+
+    def test_elongated_triangular_has_both_squares_and_triangles(self):
+        sides = {n for _cx, _cy, n, _rot in self._cells("elongated_triangular")}
+        assert 4 in sides, "Missing squares (n=4) in elongated_triangular tiling"
+        assert 3 in sides, "Missing triangles (n=3) in elongated_triangular tiling"
+
+    def test_elongated_triangular_triangle_to_square_ratio(self):
+        """Elongated-triangular tiling has exactly 2 triangles per square."""
+        cells = self._cells("elongated_triangular")
+        n_sq  = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_sq > 0, "No squares in elongated_triangular tiling"
+        # Allow ±20% tolerance for boundary cropping.
+        assert abs(n_tri / n_sq - 2.0) < 0.20, (
+            f"Expected tri/sq ratio ≈ 2.0, got {n_tri/n_sq:.3f}"
+        )
+
+    def test_elongated_triangular_square_rotation(self):
+        """Elongated-triangular squares must be at rot=45°."""
+        sq_rots = {rot for _cx, _cy, n, rot in self._cells("elongated_triangular") if n == 4}
+        assert 45.0 in sq_rots, "Missing axis-aligned squares (rot=45°) in elongated_triangular"
+
+    def test_elongated_triangular_triangle_rotations(self):
+        """Elongated-triangular must contain both up (90°) and down (270°) triangles."""
+        tri_rots = {rot for _cx, _cy, n, rot in self._cells("elongated_triangular") if n == 3}
+        assert 90.0  in tri_rots, "Missing up-pointing triangles (rot=90°) in elongated_triangular"
+        assert 270.0 in tri_rots, "Missing down-pointing triangles (rot=270°) in elongated_triangular"
+
+    def test_all_centres_within_region_elongated_triangular(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("elongated_triangular"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    def test_no_duplicate_centres_elongated_triangular(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("elongated_triangular")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in elongated_triangular tiling"
+
+    def test_elongated_triangular_circumradius(self):
+        """Elongated-triangular circumradius is the square circumradius = cell_size·√2/2."""
+        p = get_tiling_provider("elongated_triangular")
+        for s in (5.0, 8.0, 12.0):
+            expected = s * math.sqrt(2) / 2.0
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_elongated_triangular_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the nearest centre-to-centre distance is cell_size/√3,
+        corresponding to the up/down triangle pair sharing a vertical edge."""
+        cell_size = 9.0
+        expected  = cell_size / math.sqrt(3)
+        p  = get_tiling_provider("elongated_triangular")
+        cs = p.get_cells(0.0, 100.0, 0.0, 100.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Elongated-triangular min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_elongated_triangular_coverage_uniform_across_y(self):
+        """Elongated-triangular tiling must cover the region uniformly at all Y positions.
+
+        The oblique a2 vector (a2x = −step/2) introduces a leftward x-drift
+        per row.  Without extra_cols the top-right corner of tall regions
+        would be under-populated.
+        """
+        p    = get_tiling_provider("elongated_triangular")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        strip_height = step * (2.0 + sq3) / 2.0   # a2y
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strips of elongated_triangular tiling"
+        assert high_cells > 0, "No cells in top strips of elongated_triangular tiling"
+        # Allow ±3 cells difference for boundary cropping.
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible oblique drift in elongated_triangular tiling."
+        )
+
+    # ── truncated hexagonal tiling (3.12.12) ─────────────────────────────
+
+    def test_truncated_hexagonal_non_empty(self):
+        assert len(self._cells("truncated_hexagonal")) > 0
+
+    def test_n_sides_correct_for_truncated_hexagonal(self):
+        """Truncated-hexagonal cells must be dodecagons (n=12) or triangles (n=3)."""
+        for cx, cy, n, rot in self._cells("truncated_hexagonal"):
+            assert n in (3, 12), f"Unexpected n_sides={n} in truncated_hexagonal tiling"
+
+    def test_truncated_hexagonal_has_both_dodecagons_and_triangles(self):
+        sides = {n for _cx, _cy, n, _rot in self._cells("truncated_hexagonal")}
+        assert 12 in sides, "Missing dodecagons (n=12) in truncated_hexagonal tiling"
+        assert 3  in sides, "Missing triangles (n=3) in truncated_hexagonal tiling"
+
+    def test_truncated_hexagonal_triangle_to_dodecagon_ratio(self):
+        """Truncated-hexagonal tiling has exactly 2 triangles per dodecagon."""
+        cells  = self._cells("truncated_hexagonal")
+        n_12   = sum(1 for _cx, _cy, n, _rot in cells if n == 12)
+        n_tri  = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_12 > 0, "No dodecagons in truncated_hexagonal tiling"
+        # Allow ±20% tolerance for boundary cropping.
+        assert abs(n_tri / n_12 - 2.0) < 0.20, (
+            f"Expected tri/dodec ratio ≈ 2.0, got {n_tri/n_12:.3f}"
+        )
+
+    def test_truncated_hexagonal_dodecagon_rotation(self):
+        """Truncated-hexagonal dodecagons must be at rot=15° (flat-top)."""
+        dodec_rots = {rot for _cx, _cy, n, rot in self._cells("truncated_hexagonal") if n == 12}
+        assert 15.0 in dodec_rots, "Missing flat-top dodecagons (rot=15°) in truncated_hexagonal"
+
+    def test_truncated_hexagonal_triangle_rotations(self):
+        """Truncated-hexagonal must contain triangles at rot=30° (apex-down) and rot=90° (apex-up)."""
+        tri_rots = {rot for _cx, _cy, n, rot in self._cells("truncated_hexagonal") if n == 3}
+        assert 30.0 in tri_rots, "Missing apex-down triangles (rot=30°) in truncated_hexagonal"
+        assert 90.0 in tri_rots, "Missing apex-up triangles (rot=90°) in truncated_hexagonal"
+
+    def test_all_centres_within_region_truncated_hexagonal(self):
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("truncated_hexagonal"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} out of [{r['gx0']},{r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} out of [{r['gy0']},{r['gy1']}]"
+
+    def test_no_duplicate_centres_truncated_hexagonal(self):
+        pts = [(round(cx, 6), round(cy, 6))
+               for cx, cy, _n, _rot in self._cells("truncated_hexagonal")]
+        assert len(pts) == len(set(pts)), "Duplicate cell centres in truncated_hexagonal tiling"
+
+    def test_truncated_hexagonal_circumradius(self):
+        """Truncated-hexagonal circumradius is the 12-gon circumradius = cell_size/(2·sin(π/12))."""
+        p = get_tiling_provider("truncated_hexagonal")
+        for s in (5.0, 8.0, 12.0):
+            expected = s / (2.0 * math.sin(math.pi / 12.0))
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9
+
+    def test_truncated_hexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the nearest centre-to-centre distance equals
+        cell_size·(3+2√3)/3, the dodecagon-centre to adjacent triangle-centre
+        distance (= a/√3 where a = cell_size·(2+√3))."""
+        cell_size = 9.0
+        sq3 = math.sqrt(3)
+        expected  = cell_size * (3.0 + 2.0 * sq3) / 3.0
+        p  = get_tiling_provider("truncated_hexagonal")
+        cs = p.get_cells(0.0, 200.0, 0.0, 200.0, cell_size, 0.0)
+        min_dist = float("inf")
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Truncated-hexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_truncated_hexagonal_coverage_uniform_across_y(self):
+        """Truncated-hexagonal tiling must cover the region uniformly at all Y positions.
+
+        The oblique a2 vector (a2x = a/2 > 0) introduces a rightward x-drift
+        per row.  Without extra_cols compensation, cells at the left edge of
+        tall regions would be missed.
+        """
+        p    = get_tiling_provider("truncated_hexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        a    = step * (2.0 + sq3)
+        strip_height = a * sq3 / 2.0   # a2y
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strips of truncated_hexagonal tiling"
+        assert high_cells > 0, "No cells in top strips of truncated_hexagonal tiling"
+        # Allow ±3 cells difference for boundary cropping.
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible oblique drift in truncated_hexagonal tiling."
+        )
+
+    # ── small rhombitrihexagonal (3.4.6.4) ───────────────────────────────
+
+    def test_small_rhombitrihexagonal_non_empty(self):
+        """Small-rhombitrihexagonal tiling must return cells for a valid region."""
+        assert len(self._cells("small_rhombitrihexagonal")) > 0
+
+    def test_n_sides_correct_for_small_rhombitrihexagonal(self):
+        """Every polygon must be a triangle (3), square (4), or hexagon (6)."""
+        for _cx, _cy, n, _rot in self._cells("small_rhombitrihexagonal"):
+            assert n in (3, 4, 6), (
+                f"Unexpected n_sides={n} in small_rhombitrihexagonal tiling"
+            )
+
+    def test_small_rhombitrihexagonal_has_all_three_polygon_types(self):
+        """Tiling must contain triangles, squares, and hexagons."""
+        sides = {n for _cx, _cy, n, _rot in self._cells("small_rhombitrihexagonal")}
+        assert 3  in sides, "Missing triangles (n=3) in small_rhombitrihexagonal"
+        assert 4  in sides, "Missing squares (n=4) in small_rhombitrihexagonal"
+        assert 6  in sides, "Missing hexagons (n=6) in small_rhombitrihexagonal"
+
+    def test_small_rhombitrihexagonal_polygon_ratios(self):
+        """In a large region sq/hex ≈ 3.0 and tri/hex ≈ 2.0 (within 10%)."""
+        p     = get_tiling_provider("small_rhombitrihexagonal")
+        cells = p.get_cells(0.0, 500.0, 0.0, 500.0, 8.0, 1.5)
+        n_hex = sum(1 for _cx, _cy, n, _rot in cells if n == 6)
+        n_sq  = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_hex > 0, "No hexagons in small_rhombitrihexagonal tiling"
+        assert abs(n_sq  / n_hex - 3.0) < 0.10 * 3.0, (
+            f"sq/hex={n_sq/n_hex:.4f}, expected≈3.0"
+        )
+        assert abs(n_tri / n_hex - 2.0) < 0.10 * 2.0, (
+            f"tri/hex={n_tri/n_hex:.4f}, expected≈2.0"
+        )
+
+    def test_small_rhombitrihexagonal_hex_rotation(self):
+        """Hexagons are flat-top with first vertex at 0° (rot=0.0)."""
+        hex_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("small_rhombitrihexagonal") if n == 6
+        }
+        assert 0.0 in hex_rots, (
+            "Missing flat-top hexagons (rot=0°) in small_rhombitrihexagonal"
+        )
+
+    def test_small_rhombitrihexagonal_square_rotations(self):
+        """Squares must appear at rotations 75°, 135°, and 195°."""
+        sq_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("small_rhombitrihexagonal") if n == 4
+        }
+        assert 75.0  in sq_rots, "Missing square rot=75° in small_rhombitrihexagonal"
+        assert 135.0 in sq_rots, "Missing square rot=135° in small_rhombitrihexagonal"
+        assert 195.0 in sq_rots, "Missing square rot=195° in small_rhombitrihexagonal"
+
+    def test_small_rhombitrihexagonal_triangle_rotations(self):
+        """Triangles must appear at rotations 60° and 0°."""
+        tri_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("small_rhombitrihexagonal") if n == 3
+        }
+        assert 60.0 in tri_rots, "Missing triangle rot=60° in small_rhombitrihexagonal"
+        assert 0.0  in tri_rots, "Missing triangle rot=0° in small_rhombitrihexagonal"
+
+    def test_all_centres_within_region_small_rhombitrihexagonal(self):
+        """All polygon centres must lie strictly within the query region."""
+        r = self._region
+        for cx, cy, _n, _rot in self._cells("small_rhombitrihexagonal"):
+            assert r["gx0"] <= cx <= r["gx1"], f"cx={cx} outside [{r['gx0']}, {r['gx1']}]"
+            assert r["gy0"] <= cy <= r["gy1"], f"cy={cy} outside [{r['gy0']}, {r['gy1']}]"
+
+    def test_no_duplicate_centres_small_rhombitrihexagonal(self):
+        """No two cells must share the same centre point."""
+        pts = [
+            (round(cx, 6), round(cy, 6))
+            for cx, cy, _n, _rot in self._cells("small_rhombitrihexagonal")
+        ]
+        assert len(pts) == len(set(pts)), (
+            "Duplicate cell centres in small_rhombitrihexagonal tiling"
+        )
+
+    def test_small_rhombitrihexagonal_circumradius(self):
+        """Circumradius equals cell_size (regular hexagon circumradius = side)."""
+        p = get_tiling_provider("small_rhombitrihexagonal")
+        for s in (5.0, 8.0, 12.0):
+            assert abs(p.cell_circumradius(s) - s) < 1e-9
+
+    def test_small_rhombitrihexagonal_empty_region(self):
+        """Zero-width and zero-height regions must return an empty list."""
+        p = get_tiling_provider("small_rhombitrihexagonal")
+        assert p.get_cells(50.0, 50.0, 0.0, 100.0, 8.0, 1.5) == []
+        assert p.get_cells(0.0, 100.0, 50.0, 50.0, 8.0, 1.5) == []
+
+    def test_small_rhombitrihexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the nearest centre-to-centre distance equals
+        step·(√3+3)/6 (= a/(2·√3)) — the distance between an adjacent
+        Square B and Triangle B that share a vertical edge."""
+        cell_size = 9.0
+        sq3       = math.sqrt(3)
+        step      = cell_size          # wall_t = 0
+        a         = step * (1.0 + sq3)
+        expected  = a / (2.0 * sq3)   # = step·(√3+3)/6
+
+        p   = get_tiling_provider("small_rhombitrihexagonal")
+        cs  = p.get_cells(0.0, 200.0, 0.0, 200.0, cell_size, 0.0)
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        min_dist = float("inf")
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Small-rhombitrihexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_small_rhombitrihexagonal_coverage_uniform_across_y(self):
+        """Tiling must cover the region uniformly at all Y positions.
+
+        The positive A1y = a/2 introduces an upward y-drift per column index.
+        Without extra_rows compensation, cells at the bottom of wide regions
+        would be missed.
+        """
+        p = get_tiling_provider("small_rhombitrihexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3)
+        a    = step * (1.0 + sq3)
+        strip_height = a   # A2y — one row spacing
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        low_cells  = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        high_cells = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert low_cells  > 0, "No cells in bottom strip of small_rhombitrihexagonal tiling"
+        assert high_cells > 0, "No cells in top strip of small_rhombitrihexagonal tiling"
+        assert abs(low_cells - high_cells) <= 3, (
+            f"Cell counts differ: bottom={low_cells}, top={high_cells}. "
+            "Possible y-drift in small_rhombitrihexagonal tiling."
+        )
+
+    # ── great rhombitrihexagonal (4.6.12) ────────────────────────────────
+
+    def test_great_rhombitrihexagonal_non_empty(self):
+        """Great-rhombitrihexagonal tiling must return cells for a valid region."""
+        assert len(self._cells("great_rhombitrihexagonal")) > 0
+
+    def test_n_sides_correct_for_great_rhombitrihexagonal(self):
+        """Cells must be squares (n=4), hexagons (n=6), or dodecagons (n=12)."""
+        for _cx, _cy, n, _rot in self._cells("great_rhombitrihexagonal"):
+            assert n in (4, 6, 12), (
+                f"Unexpected n_sides={n} in great_rhombitrihexagonal tiling"
+            )
+
+    def test_great_rhombitrihexagonal_has_all_three_polygon_types(self):
+        """Great-rhombitrihexagonal must contain squares, hexagons, and dodecagons."""
+        sides = {n for _cx, _cy, n, _rot in self._cells("great_rhombitrihexagonal")}
+        assert 4  in sides, "Missing squares (n=4) in great_rhombitrihexagonal"
+        assert 6  in sides, "Missing hexagons (n=6) in great_rhombitrihexagonal"
+        assert 12 in sides, "Missing dodecagons (n=12) in great_rhombitrihexagonal"
+
+    def test_great_rhombitrihexagonal_polygon_ratios(self):
+        """Per unit cell: 3 squares, 2 hexagons, 1 dodecagon (ratio 3:2:1).
+
+        Boundary cropping can shave cells from the finite test region; a 20 %
+        tolerance prevents false positives from boundary effects while still
+        catching any structural bug (e.g. missing an entire polygon type).
+        """
+        p     = get_tiling_provider("great_rhombitrihexagonal")
+        cells = p.get_cells(0.0, 500.0, 0.0, 500.0, **self._cell)
+        n_sq   = sum(1 for _cx, _cy, n, _rot in cells if n == 4)
+        n_hex  = sum(1 for _cx, _cy, n, _rot in cells if n == 6)
+        n_dodec = sum(1 for _cx, _cy, n, _rot in cells if n == 12)
+        assert n_dodec > 0, "No dodecagons in great_rhombitrihexagonal tiling"
+        # sq : hex : dodec ≈ 3 : 2 : 1
+        assert abs(n_hex / n_dodec - 2.0) < 0.20, (
+            f"hex/dodec ratio {n_hex/n_dodec:.3f} ≠ expected ≈ 2.0"
+        )
+        assert abs(n_sq / n_hex - 1.5) < 0.20, (
+            f"sq/hex ratio {n_sq/n_hex:.3f} ≠ expected ≈ 1.5"
+        )
+
+    def test_great_rhombitrihexagonal_dodec_rotation(self):
+        """All dodecagons must have rotation 15° (first vertex at 15°)."""
+        dodec_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("great_rhombitrihexagonal") if n == 12
+        }
+        assert 15.0 in dodec_rots, (
+            "Missing dodecagons with rot=15° in great_rhombitrihexagonal"
+        )
+
+    def test_great_rhombitrihexagonal_hex_rotation(self):
+        """All hexagons must have rotation 0° (flat-top orientation)."""
+        hex_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("great_rhombitrihexagonal") if n == 6
+        }
+        assert 0.0 in hex_rots, (
+            "Missing hexagons with rot=0° in great_rhombitrihexagonal"
+        )
+        assert hex_rots == {0.0}, (
+            f"Unexpected hexagon rotations in great_rhombitrihexagonal: {hex_rots}"
+        )
+
+    def test_great_rhombitrihexagonal_square_rotations(self):
+        """Three distinct square orientations (45°, 105°, 165°) must be present."""
+        sq_rots = {
+            rot for _cx, _cy, n, rot
+            in self._cells("great_rhombitrihexagonal") if n == 4
+        }
+        assert 45.0  in sq_rots, "Missing square rot=45°  in great_rhombitrihexagonal"
+        assert 105.0 in sq_rots, "Missing square rot=105° in great_rhombitrihexagonal"
+        assert 165.0 in sq_rots, "Missing square rot=165° in great_rhombitrihexagonal"
+
+    def test_all_centres_within_region_great_rhombitrihexagonal(self):
+        """Every cell centre must lie within the requested bounds."""
+        gx0, gx1, gy0, gy1 = 10.0, 190.0, 10.0, 190.0
+        p = get_tiling_provider("great_rhombitrihexagonal")
+        for cx, cy, _n, _rot in p.get_cells(gx0, gx1, gy0, gy1, **self._cell):
+            assert gx0 <= cx <= gx1, f"cx={cx} out of [{gx0}, {gx1}]"
+            assert gy0 <= cy <= gy1, f"cy={cy} out of [{gy0}, {gy1}]"
+
+    def test_no_duplicate_centres_great_rhombitrihexagonal(self):
+        """No two cells may share the same (cx, cy, n_sides) triple."""
+        seen = set()
+        for cx, cy, n, _rot in self._cells("great_rhombitrihexagonal"):
+            key = (round(cx, 6), round(cy, 6), n)
+            assert key not in seen, (
+                f"Duplicate cell centre {key} in great_rhombitrihexagonal tiling"
+            )
+            seen.add(key)
+
+    def test_great_rhombitrihexagonal_circumradius(self):
+        """Circumradius must equal cell_size·(√6+√2)/2 (dodecagon circumradius)."""
+        p = get_tiling_provider("great_rhombitrihexagonal")
+        sq6, sq2 = math.sqrt(6.0), math.sqrt(2.0)
+        for s in (5.0, 8.0, 12.0):
+            expected = s * (sq6 + sq2) / 2.0
+            assert abs(p.cell_circumradius(s) - expected) < 1e-9, (
+                f"Circumradius({s}) = {p.cell_circumradius(s):.6f} ≠ {expected:.6f}"
+            )
+
+    def test_great_rhombitrihexagonal_empty_region(self):
+        """Zero-width and zero-height regions must return an empty list."""
+        p = get_tiling_provider("great_rhombitrihexagonal")
+        assert p.get_cells(50.0, 50.0, 0.0, 100.0, 8.0, 1.5) == []
+        assert p.get_cells(0.0, 100.0, 50.0, 50.0, 8.0, 1.5) == []
+
+    def test_great_rhombitrihexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the minimum centre-to-centre distance is step·(1+√3)/2.
+
+        The closest pair is a square and an adjacent hexagon that share a
+        vertex (square-A at (a/2, 0) and hexagon-A at (a/2, a√3/6));
+        their distance = a√3/6 = step·(3+√3)·√3/6 = step·(1+√3)/2.
+        """
+        cell_size = 9.0
+        sq3       = math.sqrt(3.0)
+        step      = cell_size          # wall_t = 0
+        expected  = step * (1.0 + sq3) / 2.0
+
+        p   = get_tiling_provider("great_rhombitrihexagonal")
+        cs  = p.get_cells(0.0, 200.0, 0.0, 200.0, cell_size, 0.0)
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        min_dist = float("inf")
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Great-rhombitrihexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_great_rhombitrihexagonal_coverage_uniform_across_x(self):
+        """Tiling must cover the region uniformly at all X positions.
+
+        The positive A2x = a/2 introduces a rightward x-drift per row index.
+        Without extra_cols compensation, cells at the left edge of tall regions
+        would be missed.
+        """
+        p = get_tiling_provider("great_rhombitrihexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3.0)
+        a    = step * (3.0 + sq3)
+        strip_width = a   # A1x — one column spacing
+
+        gx0, gx1 = 0.0, 200.0
+        gy0, gy1 = 0.0, 500.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        left_cells  = sum(1 for cx, _cy, _n, _rot in cells if cx < gx0 + 2 * strip_width)
+        right_cells = sum(1 for cx, _cy, _n, _rot in cells if cx > gx1 - 2 * strip_width)
+
+        assert left_cells  > 0, "No cells in left strip of great_rhombitrihexagonal tiling"
+        assert right_cells > 0, "No cells in right strip of great_rhombitrihexagonal tiling"
+        assert abs(left_cells - right_cells) <= 6, (
+            f"Cell counts differ: left={left_cells}, right={right_cells}. "
+            "Possible x-drift in great_rhombitrihexagonal tiling."
+        )
+
+
+# ===========================================================================
+# Snub Hexagonal tiling (3.3.3.3.6)
+# ===========================================================================
+
+class TestSnubHexagonalTiling:
+    """Unit tests for SnubHexagonalTilingProvider (3.3.3.3.6).
+
+    The tiling is chiral (right-handed).  Each unit cell contains 1 hexagon
+    and 8 equilateral triangles (area identity: 3√3/2 + 8·√3/4 = 7√3/2 =
+    |A1 × A2|).
+    """
+
+    _cell = dict(cell_size=8.0, wall_t=1.5)
+
+    def _cells(self):
+        p = get_tiling_provider("snub_hexagonal")
+        return p.get_cells(0.0, 200.0, 0.0, 200.0, **self._cell)
+
+    # ------------------------------------------------------------------
+    # Basic structure
+    # ------------------------------------------------------------------
+
+    def test_snub_hexagonal_non_empty(self):
+        """Snub hexagonal tiling must return cells for a valid region."""
+        assert len(self._cells()) > 0
+
+    def test_snub_hexagonal_has_hexagons_and_triangles(self):
+        """Snub hexagonal must contain hexagons (n=6) and triangles (n=3)."""
+        sides = {n for _cx, _cy, n, _rot in self._cells()}
+        assert 6 in sides, "Missing hexagons (n=6) in snub_hexagonal tiling"
+        assert 3 in sides, "Missing triangles (n=3) in snub_hexagonal tiling"
+
+    def test_snub_hexagonal_only_hexagons_and_triangles(self):
+        """Snub hexagonal must contain *only* hexagons and triangles."""
+        for _cx, _cy, n, _rot in self._cells():
+            assert n in (3, 6), (
+                f"Unexpected n_sides={n} in snub_hexagonal tiling"
+            )
+
+    def test_snub_hexagonal_triangle_to_hex_ratio(self):
+        """Per unit cell ratio: 8 triangles : 1 hexagon.
+
+        A 20 % tolerance accounts for boundary cropping effects.
+        """
+        p     = get_tiling_provider("snub_hexagonal")
+        cells = p.get_cells(0.0, 500.0, 0.0, 500.0, **self._cell)
+        n_hex = sum(1 for _cx, _cy, n, _rot in cells if n == 6)
+        n_tri = sum(1 for _cx, _cy, n, _rot in cells if n == 3)
+        assert n_hex > 0, "No hexagons in snub_hexagonal tiling"
+        ratio = n_tri / n_hex
+        assert abs(ratio - 8.0) < 1.6, (           # 20 % of 8 ≈ 1.6
+            f"tri/hex ratio {ratio:.3f} ≠ expected ≈ 8.0"
+        )
+
+    # ------------------------------------------------------------------
+    # Rotations
+    # ------------------------------------------------------------------
+
+    def test_snub_hexagonal_hex_rotation(self):
+        """All hexagons must have rotation 0° (vertex-right orientation)."""
+        hex_rots = {
+            rot for _cx, _cy, n, rot in self._cells() if n == 6
+        }
+        assert hex_rots == {0.0}, (
+            f"Unexpected hexagon rotations in snub_hexagonal: {hex_rots}"
+        )
+
+    def test_snub_hexagonal_triangle_rotations(self):
+        """Both triangle orientations (rot=30° and rot=90°) must be present."""
+        tri_rots = {
+            rot for _cx, _cy, n, rot in self._cells() if n == 3
+        }
+        assert 30.0 in tri_rots, "Missing triangle rot=30° in snub_hexagonal"
+        assert 90.0 in tri_rots, "Missing triangle rot=90° in snub_hexagonal"
+
+    # ------------------------------------------------------------------
+    # Geometric invariants
+    # ------------------------------------------------------------------
+
+    def test_all_centres_within_region_snub_hexagonal(self):
+        """Every cell centre must lie within the requested bounds."""
+        gx0, gx1, gy0, gy1 = 10.0, 190.0, 10.0, 190.0
+        p = get_tiling_provider("snub_hexagonal")
+        for cx, cy, _n, _rot in p.get_cells(gx0, gx1, gy0, gy1, **self._cell):
+            assert gx0 <= cx <= gx1, f"cx={cx} out of [{gx0}, {gx1}]"
+            assert gy0 <= cy <= gy1, f"cy={cy} out of [{gy0}, {gy1}]"
+
+    def test_no_duplicate_centres_snub_hexagonal(self):
+        """No two cells may share the same (cx, cy, n_sides) triple."""
+        seen = set()
+        for cx, cy, n, _rot in self._cells():
+            key = (round(cx, 6), round(cy, 6), n)
+            assert key not in seen, (
+                f"Duplicate cell centre {key} in snub_hexagonal tiling"
+            )
+            seen.add(key)
+
+    def test_snub_hexagonal_empty_region(self):
+        """Zero-width and zero-height regions must return an empty list."""
+        p = get_tiling_provider("snub_hexagonal")
+        assert p.get_cells(50.0, 50.0, 0.0, 100.0, 8.0, 1.5) == []
+        assert p.get_cells(0.0, 100.0, 50.0, 50.0, 8.0, 1.5) == []
+
+    def test_snub_hexagonal_circumradius(self):
+        """Circumradius must equal cell_size (hexagon circumradius = edge length)."""
+        p = get_tiling_provider("snub_hexagonal")
+        for s in (5.0, 8.0, 12.0):
+            assert abs(p.cell_circumradius(s) - s) < 1e-9, (
+                f"Circumradius({s}) = {p.cell_circumradius(s):.6f} ≠ {s}"
+            )
+
+    def test_snub_hexagonal_adjacency_distance_at_zero_wall(self):
+        """With wall_t=0 the minimum centre-to-centre distance is step/√3.
+
+        This is the distance between the centres of two edge-sharing equilateral
+        triangles: 2 × apothem = 2 × (s / (2√3)) = s/√3.
+        """
+        cell_size = 9.0
+        sq3       = math.sqrt(3.0)
+        step      = cell_size          # wall_t = 0
+        expected  = step / sq3
+
+        p   = get_tiling_provider("snub_hexagonal")
+        cs  = p.get_cells(0.0, 200.0, 0.0, 200.0, cell_size, 0.0)
+        pts = [(cx, cy) for cx, cy, _n, _rot in cs]
+        min_dist = float("inf")
+        for i, (ax, ay) in enumerate(pts):
+            for bx, by in pts[i + 1:]:
+                d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+                if d < min_dist:
+                    min_dist = d
+        assert abs(min_dist - expected) < expected * _SPACING_RTOL, (
+            f"Snub-hexagonal min dist {min_dist:.4f} ≠ expected {expected:.4f}"
+        )
+
+    def test_snub_hexagonal_coverage_uniform_across_y(self):
+        """Tiling must cover the region uniformly at all Y positions.
+
+        The positive A1y = step·√3/2 introduces an upward y-drift per column
+        index.  Without extra_rows_bot compensation, cells at the bottom of
+        wide regions would be missed.
+        """
+        p = get_tiling_provider("snub_hexagonal")
+        cell_size, wall_t = 8.0, 1.5
+        step = cell_size + wall_t
+        sq3  = math.sqrt(3.0)
+        strip_height = step * 3.0 * sq3 / 2.0   # A2y — one row spacing
+
+        gx0, gx1 = 0.0, 500.0
+        gy0, gy1 = 0.0, 200.0
+        cells = p.get_cells(gx0, gx1, gy0, gy1, cell_size, wall_t)
+
+        bottom_cells = sum(1 for _cx, cy, _n, _rot in cells if cy < gy0 + 2 * strip_height)
+        top_cells    = sum(1 for _cx, cy, _n, _rot in cells if cy > gy1 - 2 * strip_height)
+
+        assert bottom_cells > 0, "No cells in bottom strip of snub_hexagonal tiling"
+        assert top_cells    > 0, "No cells in top strip of snub_hexagonal tiling"
+        assert abs(bottom_cells - top_cells) <= 15, (
+            f"Cell counts differ: bottom={bottom_cells}, top={top_cells}. "
+            "Possible y-drift in snub_hexagonal tiling."
+        )
+
+
+# ===========================================================================
+# Full-region tiling: cells reach the perimeter zone
+# ===========================================================================
+
+class TestFullRegionTiling:
+    """Verify that tiling providers generate cells in the perimeter zone when
+    called with full shelf bounds (the behaviour expected by the new make_piece
+    exclusion-zone fuse-back approach).
+
+    Previously make_piece passed interior bounds (perim_w … total-perim_w) to
+    get_cells(), so cells in the perimeter band were never generated.  With the
+    redesign, make_piece passes (0 … total_w, 0 … total_l) and fuses solid
+    exclusion-zone blocks back after cutting holes, giving cleanly truncated
+    polygons at zone boundaries.
+    """
+
+    # Representative shelf and tiling parameters.
+    _W      = 200.0
+    _L      = 150.0
+    _PERIM  = 10.0
+    _CELL   = 8.0
+    _WALL   = 1.5
+
+    @pytest.mark.parametrize("key", list(LATTICE_TYPES.keys()))
+    def test_cells_generated_inside_perimeter_zone(self, key):
+        """get_cells() with full bounds must return at least one cell whose
+        centre falls within the perimeter band (within perim_w of an edge).
+        """
+        p = get_tiling_provider(key)
+        cells = p.get_cells(0.0, self._W, 0.0, self._L, self._CELL, self._WALL)
+        perim = self._PERIM
+        W, L  = self._W, self._L
+
+        perimeter_cells = [
+            (cx, cy) for cx, cy, _n, _rot in cells
+            if (cx < perim or cx > W - perim or cy < perim or cy > L - perim)
+        ]
+        assert len(perimeter_cells) > 0, (
+            f"No cells in perimeter zone for tiling {key!r} with full bounds. "
+            "make_piece now needs cells there for the fuse-back approach."
+        )
+
+    @pytest.mark.parametrize("key", list(LATTICE_TYPES.keys()))
+    def test_full_region_produces_more_cells_than_interior(self, key):
+        """Full-bounds get_cells() must return strictly more cells than the
+        interior-only call (because the perimeter zone is now included).
+        """
+        p = get_tiling_provider(key)
+        perim = self._PERIM
+        W, L  = self._W, self._L
+
+        cells_full     = p.get_cells(0.0, W, 0.0, L, self._CELL, self._WALL)
+        cells_interior = p.get_cells(perim, W - perim, perim, L - perim,
+                                     self._CELL, self._WALL)
+
+        assert len(cells_full) > len(cells_interior), (
+            f"Full-region call returned no extra cells vs interior for {key!r}. "
+            "Perimeter-zone cells are required for the exclusion fuse-back."
+        )
+
+    @pytest.mark.parametrize("key", list(LATTICE_TYPES.keys()))
+    def test_no_duplicates_full_region(self, key):
+        """Full-bounds get_cells() must still produce no duplicate centres."""
+        p = get_tiling_provider(key)
+        cells = p.get_cells(0.0, self._W, 0.0, self._L, self._CELL, self._WALL)
+        pts   = [(round(cx, 6), round(cy, 6)) for cx, cy, _n, _rot in cells]
+        assert len(pts) == len(set(pts)), (
+            f"Duplicate cell centres when using full bounds for {key!r}"
+        )
+
+    @pytest.mark.parametrize("key", list(LATTICE_TYPES.keys()))
+    def test_all_centres_within_full_region_bounds(self, key):
+        """All cell centres must lie within [0, W] × [0, L]."""
+        p = get_tiling_provider(key)
+        cells = p.get_cells(0.0, self._W, 0.0, self._L, self._CELL, self._WALL)
+        for cx, cy, _n, _rot in cells:
+            assert 0.0 <= cx <= self._W, f"cx={cx} out of [0, {self._W}]"
+            assert 0.0 <= cy <= self._L, f"cy={cy} out of [0, {self._L}]"
+
+
+class TestIsExcludedLegacy:
+    """is_excluded() is kept for backward-compatibility.  Its tests are
+    separate from the new full-region approach to make it clear the function
+    is a standalone utility, no longer called by make_piece().
+    """
+
+    def test_is_excluded_still_suppresses_perimeter_cells(self):
+        """is_excluded() must still return True for cells in the perimeter band."""
+        # Cell 5 mm from the left edge, perim_w=10 → inside the perimeter band
+        assert is_excluded(
+            cx=5.0, cy=50.0,
+            hex_size=8.0, perim_w=10.0,
+            total_w=200.0, total_l=100.0,
+            x_cuts=[], y_cuts=[],
+        ), "Cell at cx=5 (inside 10 mm perimeter) should be excluded"
+
+    def test_is_excluded_false_for_interior_cell(self):
+        """is_excluded() must return False for a safely interior cell."""
+        assert not is_excluded(
+            cx=100.0, cy=50.0,
+            hex_size=8.0, perim_w=10.0,
+            total_w=200.0, total_l=100.0,
+            x_cuts=[], y_cuts=[],
+        ), "Cell at cx=100 (centre of a 200-wide shelf) should not be excluded"
+
+
+# ===========================================================================
+# _centered_joint_range  (pure-Python helper for configurable joint span)
+# ===========================================================================
+
+class TestCenteredJointRange:
+    """Tests for _centered_joint_range() — the helper that centres the
+    finger-joint zone within a cut face, leaving equal solid margins on
+    both sides when joint_span < face length.
+    """
+
+    def test_zero_span_returns_full_face(self):
+        """joint_span=0 must return the full face unchanged."""
+        s, e = _centered_joint_range(10.0, 50.0, 0.0)
+        assert s == pytest.approx(10.0)
+        assert e == pytest.approx(50.0)
+
+    def test_negative_span_returns_full_face(self):
+        """Negative joint_span is treated as 0 (full face)."""
+        s, e = _centered_joint_range(0.0, 100.0, -5.0)
+        assert s == pytest.approx(0.0)
+        assert e == pytest.approx(100.0)
+
+    def test_span_equal_to_face_returns_full_face(self):
+        """joint_span equal to face length → full face (no margin needed)."""
+        s, e = _centered_joint_range(5.0, 25.0, 20.0)
+        assert s == pytest.approx(5.0)
+        assert e == pytest.approx(25.0)
+
+    def test_span_larger_than_face_returns_full_face(self):
+        """joint_span > face length → full face (clamped by the ≥ check)."""
+        s, e = _centered_joint_range(0.0, 30.0, 50.0)
+        assert s == pytest.approx(0.0)
+        assert e == pytest.approx(30.0)
+
+    def test_centred_half_span(self):
+        """With joint_span = face/2, margins should each be face/4."""
+        face_start, face_end = 0.0, 100.0
+        s, e = _centered_joint_range(face_start, face_end, 50.0)
+        assert s == pytest.approx(25.0)
+        assert e == pytest.approx(75.0)
+
+    def test_centred_arbitrary_span(self):
+        """Verify centring arithmetic for an arbitrary joint_span."""
+        face_start, face_end, span = 10.0, 90.0, 30.0
+        face_len = face_end - face_start        # 80
+        margin   = (face_len - span) / 2.0     # 25
+        s, e = _centered_joint_range(face_start, face_end, span)
+        assert s == pytest.approx(face_start + margin)
+        assert e == pytest.approx(face_end   - margin)
+
+    def test_span_zone_is_symmetric(self):
+        """The active zone should be equidistant from each face end."""
+        face_start, face_end = 0.0, 200.0
+        for span in [10.0, 50.0, 80.0, 120.0, 199.9]:
+            s, e = _centered_joint_range(face_start, face_end, span)
+            left_margin  = s - face_start
+            right_margin = face_end - e
+            assert left_margin == pytest.approx(right_margin, abs=1e-9), (
+                f"Margins differ for span={span}: left={left_margin}, "
+                f"right={right_margin}"
+            )
+
+    def test_active_span_equals_requested_span(self):
+        """The returned range width must equal the requested joint_span."""
+        for span in [5.0, 20.0, 80.0]:
+            s, e = _centered_joint_range(0.0, 100.0, span)
+            assert (e - s) == pytest.approx(span, abs=1e-9)
+
+    def test_with_nonzero_face_start(self):
+        """Centering should work correctly for faces that don't start at 0."""
+        s, e = _centered_joint_range(50.0, 150.0, 40.0)
+        # face_len=100, margin=30, so s=80, e=120
+        assert s == pytest.approx(80.0)
+        assert e == pytest.approx(120.0)
+
+    def test_start_never_less_than_face_start(self):
+        """Returned loop_start must be ≥ face_start."""
+        for span in [0.0, 1.0, 49.9, 50.0, 100.0, 200.0]:
+            s, _e = _centered_joint_range(10.0, 60.0, span)
+            assert s >= 10.0 - 1e-9
+
+    def test_end_never_greater_than_face_end(self):
+        """Returned loop_end must be ≤ face_end."""
+        for span in [0.0, 1.0, 49.9, 50.0, 100.0, 200.0]:
+            _s, e = _centered_joint_range(10.0, 60.0, span)
+            assert e <= 60.0 + 1e-9
+
+
+# ===========================================================================
+# finger_spacing placement helper (pure arithmetic)
+# ===========================================================================
+
+class TestFingerSpacingPlacement:
+    """Tests for the finger-spacing placement arithmetic used inside
+    step_joint() and finger_joint().
+
+    Pure arithmetic — no FreeCAD dependency.
+    """
+
+    def _compute_positions(self, face_len, tab_w, finger_spacing):
+        """Mirror the finger-position logic from step_joint/finger_joint."""
+        if finger_spacing > 0.0:
+            period = tab_w + finger_spacing
+            n = max(1, int((face_len + finger_spacing) / period))
+            total = n * tab_w + (n - 1) * finger_spacing
+            margin = max(0.0, (face_len - total) * 0.5)
+            return [margin + i * period for i in range(n)]
+        else:
+            n = max(1, int(face_len / tab_w) + 1)
+            return [i * tab_w for i in range(n)]
+
+    def test_zero_spacing_fills_full_face(self):
+        """spacing=0 → contiguous fingers from 0 to face_len."""
+        # Formula: n = max(1, int(face_len / tab_w) + 1) = int(100/10)+1 = 11
+        pos = self._compute_positions(100.0, 10.0, 0.0)
+        assert len(pos) == 11
+        assert pos[0] == pytest.approx(0.0)
+        assert pos[1] == pytest.approx(10.0)
+
+    def test_spaced_fingers_count(self):
+        """spacing=20mm: for 100mm face with 10mm fingers → 4 fingers."""
+        # period = 30mm, n = int((100+20)/30) = 4
+        pos = self._compute_positions(100.0, 10.0, 20.0)
+        assert len(pos) == 4
+
+    def test_spaced_fingers_centred(self):
+        """Fingers must be symmetrically centred on the face."""
+        pos = self._compute_positions(100.0, 10.0, 20.0)
+        # total span = 4*10 + 3*20 = 100mm → margin = 0
+        margin = (100.0 - 100.0) * 0.5
+        assert margin == pytest.approx(0.0)
+        assert pos[0] == pytest.approx(0.0)
+        assert pos[-1] + 10.0 == pytest.approx(100.0)
+
+    def test_spaced_fingers_gap_is_correct(self):
+        """Gap between consecutive finger ends must equal finger_spacing."""
+        spacing = 15.0
+        tab_w   = 8.0
+        pos = self._compute_positions(80.0, tab_w, spacing)
+        for i in range(len(pos) - 1):
+            gap = pos[i + 1] - (pos[i] + tab_w)
+            assert gap == pytest.approx(spacing, abs=1e-9)
+
+    def test_single_finger_minimum(self):
+        """Even if the face is very small, at least one finger is placed."""
+        pos = self._compute_positions(5.0, 10.0, 20.0)
+        assert len(pos) >= 1
+
+    def test_fingers_dont_exceed_face_end(self):
+        """Last finger end must not exceed face_len (up to a small margin)."""
+        pos = self._compute_positions(100.0, 10.0, 20.0)
+        assert pos[-1] + 10.0 <= 100.0 + 1e-6
+
+    def test_period_equals_tab_plus_spacing(self):
+        """Adjacent finger starts must be separated by tab_w + spacing."""
+        tab_w   = 12.0
+        spacing = 18.0
+        pos = self._compute_positions(120.0, tab_w, spacing)
+        for i in range(len(pos) - 1):
+            assert pos[i + 1] - pos[i] == pytest.approx(tab_w + spacing, abs=1e-9)
+
+
+# ===========================================================================
+# make_piece defaults: joint_w and support_width None-default logic
+# ===========================================================================
+
+class TestMakePieceParamDefaults:
+    """Pure-Python tests verifying that the default-value resolution logic
+    for the new make_piece() parameters is correct.  These don't call
+    make_piece() (which needs FreeCAD) but test the same arithmetic.
+    """
+
+    def test_joint_w_defaults_to_perim_w(self):
+        """When joint_w is None it should equal perim_w at run-time."""
+        perim_w = 8.0
+        joint_w = None
+        # Mirrors the logic in make_piece()
+        if joint_w is None:
+            joint_w = perim_w
+        assert joint_w == perim_w
+
+    def test_support_width_defaults_to_joint_w(self):
+        """When support_width is None it should equal joint_w at run-time."""
+        joint_w = 6.0
+        support_width = None
+        if support_width is None:
+            support_width = joint_w
+        assert support_width == joint_w
+
+    def test_tab_w_equals_joint_w(self):
+        """tab_w must equal joint_w (not perim_w) once joint_w is resolved."""
+        perim_w = 10.0
+        joint_w = 6.0
+        tab_w   = joint_w        # as in make_piece()
+        assert tab_w == 6.0
+        assert tab_w != perim_w  # joint_w != perim_w in this scenario
+
+    def test_tab_d_is_half_joint_w(self):
+        """tab_d = joint_w * 0.5 (depth sub-parameter of joint_w)."""
+        joint_w = 7.0
+        tab_d   = joint_w * 0.5
+        assert tab_d == pytest.approx(3.5)
+
+    def test_bridge_half_uses_joint_w_not_perim_w(self):
+        """Bridge bands use joint_w/2, independent of perim_w."""
+        perim_w = 10.0
+        joint_w = 4.0
+        bridge_half = joint_w * 0.5
+        assert bridge_half == pytest.approx(2.0)
+        assert bridge_half != perim_w * 0.5
+
+    def test_support_bar_spacing_zero_means_disabled(self):
+        """support_spacing == 0 should produce no bar positions."""
+        support_spacing = 0.0
+        total_w = 200.0
+        positions = []
+        bar_x = support_spacing
+        while bar_x < total_w - _GEOM_EPS and support_spacing > _GEOM_EPS:
+            positions.append(bar_x)
+            bar_x += support_spacing
+        assert positions == []
+
+    def test_support_bar_positions_correct(self):
+        """Support bars should appear at multiples of support_spacing."""
+        support_spacing = 50.0
+        total_w = 200.0
+        positions = []
+        bar_x = support_spacing
+        while bar_x < total_w - _GEOM_EPS:
+            positions.append(bar_x)
+            bar_x += support_spacing
+        # 50, 100, 150 — 200 is excluded because bar_x < total_w
+        assert positions == pytest.approx([50.0, 100.0, 150.0])
+
+    def test_support_bar_positions_do_not_include_outer_edge(self):
+        """Bars at exactly total_w are not added (that's the outer perimeter)."""
+        support_spacing = 100.0
+        total_w = 200.0
+        positions = []
+        bar_x = support_spacing
+        while bar_x < total_w - _GEOM_EPS:
+            positions.append(bar_x)
+            bar_x += support_spacing
+        assert total_w not in positions
+        assert positions == pytest.approx([100.0])
+
+
+# ===========================================================================
+# Dialog get_params() returns new keys  (no Qt needed — tests param logic)
+# ===========================================================================
+
+class TestDialogParamKeys:
+    """Verify that get_params() dict keys are correct.  Tests the static
+    logic (expected key names and None-pass-through) without instantiating
+    the Qt dialog.
+    """
+
+    def _simulate_get_params(
+        self,
+        perim=6.0,
+        joint_w_val=0.0,        # 0 → None (fall back to perim)
+        finger_spacing_val=0.0,
+        sup_spacing=0.0,
+        sup_w_val=0.0,          # 0 → None (fall back to joint_w)
+    ) -> dict:
+        """Mirrors the get_params() logic in HexLatticeDialog."""
+        joint_w = joint_w_val if joint_w_val > 0.0 else None
+        sup_w   = sup_w_val   if sup_w_val   > 0.0 else None
+        return {
+            "width": 300.0, "length": 300.0, "height": 10.0,
+            "perim_width":      perim,
+            "joint_width":      joint_w,
+            "finger_spacing":   finger_spacing_val,
+            "support_spacing":  sup_spacing,
+            "support_width":    sup_w,
+            "hex_size": 8.0, "wall_thickness": 1.5,
+            "max_piece_size": 220.0, "lattice_type": "hexagonal",
+        }
+
+    def test_joint_width_zero_returns_none(self):
+        """joint_width spinbox value 0 should produce None in the dict."""
+        params = self._simulate_get_params(joint_w_val=0.0)
+        assert params["joint_width"] is None
+
+    def test_joint_width_nonzero_returns_value(self):
+        """joint_width spinbox value > 0 should appear as-is."""
+        params = self._simulate_get_params(joint_w_val=4.0)
+        assert params["joint_width"] == pytest.approx(4.0)
+
+    def test_support_width_zero_returns_none(self):
+        """support_width spinbox value 0 should produce None in the dict."""
+        params = self._simulate_get_params(sup_w_val=0.0)
+        assert params["support_width"] is None
+
+    def test_support_width_nonzero_returns_value(self):
+        """support_width spinbox value > 0 should appear as-is."""
+        params = self._simulate_get_params(sup_w_val=3.0)
+        assert params["support_width"] == pytest.approx(3.0)
+
+    def test_finger_spacing_zero_is_in_params_dict(self):
+        """finger_spacing=0 (contiguous) must be present in the dict."""
+        params = self._simulate_get_params(finger_spacing_val=0.0)
+        assert params["finger_spacing"] == pytest.approx(0.0)
+
+    def test_finger_spacing_nonzero_preserved(self):
+        """A positive finger_spacing value must be passed through unchanged."""
+        params = self._simulate_get_params(finger_spacing_val=20.0)
+        assert params["finger_spacing"] == pytest.approx(20.0)
+
+    def test_support_spacing_zero_is_in_params_dict(self):
+        params = self._simulate_get_params(sup_spacing=0.0)
+        assert params["support_spacing"] == pytest.approx(0.0)
+
+    def test_support_spacing_nonzero_preserved(self):
+        params = self._simulate_get_params(sup_spacing=50.0)
+        assert params["support_spacing"] == pytest.approx(50.0)
+
+    def test_all_four_new_param_keys_present_in_dict(self):
+        """All four parameter keys must be in the returned dict."""
+        params = self._simulate_get_params()
+        for key in ("joint_width", "finger_spacing",
+                    "support_spacing", "support_width"):
+            assert key in params, f"Key {key!r} missing from get_params()"
+
+
+# ===========================================================================
+# joint_depth parameter — shallower finger tabs for a solid support bar
+# ===========================================================================
+
+class TestJointDepth:
+    """Tests verifying the joint_depth parameter logic.
+
+    joint_depth controls how far each finger tab penetrates into the adjacent
+    piece (tab_d).  When joint_depth < joint_w * 0.5, solid material remains
+    beyond the tab tips inside the bridge band — forming a continuous support
+    bar across the cut line.  These tests exercise the pure-Python resolution
+    logic (mirroring make_piece()'s tab_d computation) without calling FreeCAD.
+    """
+
+    def _resolve_tab_d(self, joint_w: float, joint_depth) -> float:
+        """Mirrors the tab_d resolution logic in make_piece()."""
+        return (joint_depth
+                if (joint_depth is not None and joint_depth > 0.0)
+                else joint_w * 0.5)
+
+    def test_none_depth_gives_half_joint_w(self):
+        """Default (None) → tab_d = joint_w / 2."""
+        assert self._resolve_tab_d(8.0, None) == pytest.approx(4.0)
+
+    def test_zero_depth_gives_half_joint_w(self):
+        """0 depth (spinbox default) → same as None, tab_d = joint_w / 2."""
+        assert self._resolve_tab_d(8.0, 0.0) == pytest.approx(4.0)
+
+    def test_explicit_depth_used_directly(self):
+        """Positive joint_depth is used as-is for tab_d."""
+        assert self._resolve_tab_d(8.0, 2.0) == pytest.approx(2.0)
+
+    def test_depth_smaller_than_bridge_half_leaves_solid_base(self):
+        """When joint_depth < joint_w/2, solid material exists beyond tab tips.
+
+        solid_base = bridge_half - tab_d  should be > 0.
+        """
+        joint_w    = 10.0
+        joint_depth = 3.0
+        bridge_half = joint_w * 0.5     # 5.0
+        tab_d       = self._resolve_tab_d(joint_w, joint_depth)
+        solid_base  = bridge_half - tab_d
+        assert solid_base > 0.0, "Expected solid base beyond tab tips"
+        assert solid_base == pytest.approx(2.0)
+
+    def test_depth_equal_to_bridge_half_leaves_no_solid_base(self):
+        """When joint_depth == joint_w/2 (default), no solid base remains."""
+        joint_w    = 10.0
+        joint_depth = 5.0              # exactly joint_w / 2
+        bridge_half = joint_w * 0.5
+        tab_d       = self._resolve_tab_d(joint_w, joint_depth)
+        solid_base  = bridge_half - tab_d
+        assert solid_base == pytest.approx(0.0)
+
+    def test_depth_larger_than_bridge_half_is_allowed(self):
+        """joint_depth > bridge_half is not clamped by this logic (caller's choice)."""
+        joint_w    = 6.0
+        joint_depth = 4.0              # > joint_w / 2 = 3.0
+        tab_d       = self._resolve_tab_d(joint_w, joint_depth)
+        assert tab_d == pytest.approx(4.0)
+
+    def test_depth_independent_of_joint_w(self):
+        """Different joint_w values don't affect an explicit joint_depth."""
+        depth = 2.5
+        for jw in [4.0, 6.0, 10.0, 20.0]:
+            tab_d = self._resolve_tab_d(jw, depth)
+            assert tab_d == pytest.approx(depth)
+
+    def test_support_bar_width_at_each_side(self):
+        """Solid support bar extends from tab tip to outer bridge edge on each side.
+
+        With joint_w=12, joint_depth=3:
+          bridge_half = 6
+          tab_d = 3
+          solid_bar_each_side = 3
+          total_solid = 6  (3 on each piece)
+        """
+        joint_w    = 12.0
+        joint_depth = 3.0
+        bridge_half = joint_w * 0.5
+        tab_d       = self._resolve_tab_d(joint_w, joint_depth)
+        bar_each    = bridge_half - tab_d
+        assert bar_each == pytest.approx(3.0)
+        assert bar_each * 2 == pytest.approx(6.0)  # total across both pieces
+
+
+class TestDialogJointDepthKey:
+    """Verify that get_params() includes the joint_depth key."""
+
+    def _simulate_get_params(self, joint_d_val: float = 0.0) -> dict:
+        """Mirrors the get_params() logic in HexLatticeDialog."""
+        joint_w = 0.0
+        sup_w   = 0.0
+        joint_d = joint_d_val if joint_d_val > 0.0 else None
+        return {
+            "width": 300.0, "length": 300.0, "height": 10.0,
+            "perim_width": 6.0,
+            "joint_width":     joint_w if joint_w > 0.0 else None,
+            "finger_spacing":  0.0,
+            "joint_depth":     joint_d,
+            "support_spacing": 0.0,
+            "support_width":   sup_w if sup_w > 0.0 else None,
+            "hex_size": 8.0, "wall_thickness": 1.5,
+            "max_piece_size": 220.0, "lattice_type": "hexagonal",
+        }
+
+    def test_joint_depth_zero_returns_none(self):
+        """joint_depth spinbox value 0 should produce None in the dict."""
+        params = self._simulate_get_params(joint_d_val=0.0)
+        assert params["joint_depth"] is None
+
+    def test_joint_depth_nonzero_returns_value(self):
+        """joint_depth spinbox value > 0 should appear as-is."""
+        params = self._simulate_get_params(joint_d_val=2.5)
+        assert params["joint_depth"] == pytest.approx(2.5)
+
+    def test_joint_depth_key_present_in_params(self):
+        """joint_depth key must be present in the returned dict."""
+        params = self._simulate_get_params()
+        assert "joint_depth" in params

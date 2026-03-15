@@ -18,6 +18,25 @@ FDM 3-D printer bed.
 | **Cut bridges** | The material within `perim_width / 2` of every cut line is solid (no hex voids), providing a strong base for the finger-joint. |
 | **Weight-bearing** | Multiple full-height finger tabs provide excellent shear and tension resistance. For extra strength apply CA glue or use M3 bolts through the bridge area. |
 | **FDM-friendly clearance** | Default assembly clearance is 0.15 mm (bilateral), designed for typical FFF/FDM printers. |
+| **Multiple tilings** | Choose from 5 euclidean uniform tiling patterns via the dropdown (see below). |
+
+---
+
+## Supported Tilings
+
+The `lattice_type` parameter (workbench dropdown or keyword argument) selects
+the infill pattern.  All polygons in a given tiling share the same side length
+(`hex_size` in the dialog).
+
+| Key | Display Name | Vertex Figure | Polygon Types |
+|-----|-------------|---------------|---------------|
+| `hexagonal` | Hexagonal (6.6.6) | 6.6.6 | Regular hexagon |
+| `square` | Square (4.4.4.4) | 4.4.4.4 | Square |
+| `triangular` | Triangular (3.3.3.3.3.3) | 3.3.3.3.3.3 | Equilateral triangle |
+| `trihexagonal` | Trihexagonal (3.6.3.6) | 3.6.3.6 | Triangle + hexagon |
+| `truncated_square` | Truncated Square (4.8.8) | 4.8.8 | Square + octagon |
+
+More semi-regular tilings are planned; see `TILING_PLAN.md` for the roadmap.
 
 ---
 
