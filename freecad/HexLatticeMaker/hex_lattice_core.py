@@ -1475,6 +1475,37 @@ def _centered_joint_range(
     return face_start + margin, face_end - margin
 
 
+def _x_joint_y_extents(
+    y0: float,
+    y1: float,
+    total_l: float,
+    tab_d: float,
+) -> tuple:
+    """Return effective ``(face_start, face_end)`` for an X-axis cut face.
+
+    At 4-way intersections (where an X-cut and a Y-cut cross), both X-face
+    tabs and Y-face slots would occupy overlapping 3D regions near the corner,
+    causing geometry conflicts.  This helper leaves a flat zone of width
+    *tab_d* at each end of the X-face that borders a Y-face joint, so only
+    the Y-direction handles interlocking at those corners.
+
+    A Y-face joint exists at the piece boundary when that boundary is an
+    internal cut (i.e. ``y0 > 0`` or ``y1 < total_l``).  Outer shelf edges
+    have no Y-face joint, so no flat zone is needed there.
+
+    Pure helper — no FreeCAD dependency, fully unit-testable.
+
+    Parameters
+    ----------
+    y0, y1   : Y bounds of the piece
+    total_l  : total shelf length (Y dimension)
+    tab_d    : finger tab depth; used as the flat-zone width
+    """
+    eff_y0 = y0 + tab_d if y0 > _GEOM_EPS else y0
+    eff_y1 = y1 - tab_d if y1 < total_l - _GEOM_EPS else y1
+    return eff_y0, eff_y1
+
+
 # ---------------------------------------------------------------------------
 # Finger-joint builder
 # ---------------------------------------------------------------------------
@@ -2047,16 +2078,22 @@ def make_piece(
     # ------------------------------------------------------------------
     _joint_fn = step_joint if joint_style == 'step' else finger_joint
 
+    # For X-axis cut faces, leave flat corner zones at Y-cut boundaries
+    # (where 4 pieces meet) to prevent X-face tabs from intersecting the
+    # Y-face slot geometry.  Y-face joints span the full X range unchanged
+    # so they provide the sole interlocking at those corners.
+    xj_y0, xj_y1 = _x_joint_y_extents(y0, y1, total_l, tab_d)
+
     # ── Left face (x = x0): this piece is to the RIGHT of that cut
-    if x0 > 1e-6:
-        tabs, slots = _joint_fn('x', x0, y0, y1,
+    if x0 > 1e-6 and xj_y1 > xj_y0 + _GEOM_EPS:
+        tabs, slots = _joint_fn('x', x0, xj_y0, xj_y1,
                                 height, tab_w, tab_d, 'right',
                                 joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
     # ── Right face (x = x1): this piece is to the LEFT of that cut
-    if x1 < total_w - 1e-6:
-        tabs, slots = _joint_fn('x', x1, y0, y1,
+    if x1 < total_w - 1e-6 and xj_y1 > xj_y0 + _GEOM_EPS:
+        tabs, slots = _joint_fn('x', x1, xj_y0, xj_y1,
                                 height, tab_w, tab_d, 'left',
                                 joint_span=joint_length)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)

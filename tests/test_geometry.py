@@ -31,6 +31,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     TAPER_RATIO,
     _GEOM_EPS,
     _centered_joint_range,
+    _x_joint_y_extents,
     LATTICE_TYPES,
     get_tiling_provider,
     HexagonalTilingProvider,
@@ -921,6 +922,96 @@ class TestStepJointZExtents:
         h = 10.0
         tab_z0, _, _, _ = _step_joint_z_extents(1, h, 'left')
         assert abs(tab_z0 - h * 0.5) < 1e-9   # bottom of upper tab = h/2
+
+
+# ===========================================================================
+# X-joint Y extents — flat corner zones at 4-way intersections
+# ===========================================================================
+
+class TestXJointYExtents:
+    """Tests for ``_x_joint_y_extents`` — pure Python, no FreeCAD required.
+
+    At a 4-way intersection (where an X-cut and Y-cut cross), X-face tabs
+    would be cut by the adjacent Y-face slot.  The helper leaves a flat zone
+    of width *tab_d* at each corner that borders a Y-face joint, so that only
+    the Y direction provides interlocking there.
+    """
+
+    def test_both_boundaries_are_y_cuts_shrinks_both_ends(self):
+        """When both y0 > 0 and y1 < total_l, both corners are shrunk."""
+        eff_y0, eff_y1 = _x_joint_y_extents(50.0, 150.0, 200.0, 5.0)
+        assert abs(eff_y0 - 55.0) < 1e-9
+        assert abs(eff_y1 - 145.0) < 1e-9
+
+    def test_y0_is_outer_edge_not_shrunk(self):
+        """y0 == 0 (outer shelf edge, no Y-face joint) keeps eff_y0 == y0."""
+        eff_y0, eff_y1 = _x_joint_y_extents(0.0, 150.0, 200.0, 5.0)
+        assert abs(eff_y0 - 0.0) < 1e-9
+        assert abs(eff_y1 - 145.0) < 1e-9
+
+    def test_y1_is_outer_edge_not_shrunk(self):
+        """y1 == total_l (outer shelf edge) keeps eff_y1 == y1."""
+        eff_y0, eff_y1 = _x_joint_y_extents(50.0, 200.0, 200.0, 5.0)
+        assert abs(eff_y0 - 55.0) < 1e-9
+        assert abs(eff_y1 - 200.0) < 1e-9
+
+    def test_both_outer_edges_no_shrinkage(self):
+        """Single-piece shelf (no Y-cuts): no flat zones needed."""
+        eff_y0, eff_y1 = _x_joint_y_extents(0.0, 200.0, 200.0, 5.0)
+        assert abs(eff_y0 - 0.0) < 1e-9
+        assert abs(eff_y1 - 200.0) < 1e-9
+
+    def test_flat_zone_width_equals_tab_d(self):
+        """Each flat corner zone is exactly tab_d wide."""
+        tab_d = 7.5
+        eff_y0, eff_y1 = _x_joint_y_extents(30.0, 170.0, 300.0, tab_d)
+        assert abs(eff_y0 - (30.0 + tab_d)) < 1e-9
+        assert abs(eff_y1 - (170.0 - tab_d)) < 1e-9
+
+    def test_flat_zone_width_scales_with_tab_d(self):
+        """Doubling tab_d doubles the flat-zone width."""
+        eff_y0_a, eff_y1_a = _x_joint_y_extents(20.0, 180.0, 200.0, 4.0)
+        eff_y0_b, eff_y1_b = _x_joint_y_extents(20.0, 180.0, 200.0, 8.0)
+        assert abs((eff_y0_a - 20.0) * 2 - (eff_y0_b - 20.0)) < 1e-9
+        assert abs((180.0 - eff_y1_a) * 2 - (180.0 - eff_y1_b)) < 1e-9
+
+    def test_very_narrow_piece_gives_empty_or_inverted_range(self):
+        """Flat zones from both ends can make eff_y0 >= eff_y1 (joint suppressed)."""
+        tab_d = 20.0
+        eff_y0, eff_y1 = _x_joint_y_extents(10.0, 30.0, 200.0, tab_d)
+        # y0+tab_d = 30, y1-tab_d = 10 → eff_y0 >= eff_y1
+        assert eff_y0 >= eff_y1
+
+    def test_corner_zone_prevents_x_face_at_y0_corner(self):
+        """X-face joint range never starts below y0 + tab_d when y0 is a cut."""
+        tab_d = 6.0
+        y0 = 100.0
+        eff_y0, _ = _x_joint_y_extents(y0, 300.0, 400.0, tab_d)
+        assert eff_y0 >= y0 + tab_d - 1e-9
+
+    def test_corner_zone_prevents_x_face_at_y1_corner(self):
+        """X-face joint range never ends above y1 - tab_d when y1 is a cut."""
+        tab_d = 6.0
+        y1 = 300.0
+        _, eff_y1 = _x_joint_y_extents(100.0, y1, 400.0, tab_d)
+        assert eff_y1 <= y1 - tab_d + 1e-9
+
+    def test_symmetric_piece_gives_symmetric_extents(self):
+        """Symmetric piece (y0 and y1 both cuts) produces symmetric extents."""
+        tab_d = 5.0
+        y0, y1, total_l = 50.0, 150.0, 200.0
+        eff_y0, eff_y1 = _x_joint_y_extents(y0, y1, total_l, tab_d)
+        assert abs((eff_y0 - y0) - (y1 - eff_y1)) < 1e-9
+
+    def test_y0_near_zero_still_outer_edge(self):
+        """y0 just above 0 but within GEOM_EPS is treated as outer edge."""
+        tab_d = 5.0
+        # y0 = 0 → outer edge
+        eff_y0_zero, _ = _x_joint_y_extents(0.0, 100.0, 200.0, tab_d)
+        assert abs(eff_y0_zero - 0.0) < 1e-9
+        # y0 slightly above GEOM_EPS → cut exists, shrink
+        eff_y0_cut, _ = _x_joint_y_extents(_GEOM_EPS * 2, 100.0, 200.0, tab_d)
+        assert eff_y0_cut > _GEOM_EPS * 2
 
 
 # ===========================================================================
