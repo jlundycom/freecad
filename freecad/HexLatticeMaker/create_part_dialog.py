@@ -44,14 +44,12 @@ class HexLatticeDialog(QtWidgets.QDialog):
         self.max_piece_spin  = _spin(10.0,   220.0, 220.0)
 
         # Joint / bridge parameters
-        # joint_width (UI label: "Finger width"): inner bridge width at cut
-        #   lines and finger-joint tab width.  Named joint_width internally for
-        #   backward compatibility; displayed as "Finger width" to users.
+        # joint_width: inner bridge width at cut lines and joint tab width.
         #   Defaults to perim_width (same field value) at run-time if 0.
         self.joint_width_spin = _spin(0.0, 100.0, 0.0)
         self.joint_width_spin.setSpecialValueText("= Perimeter width")
 
-        # finger_spacing: gap between consecutive fingers; 0 = contiguous.
+        # joint_spacing: gap between consecutive joint tabs; 0 = contiguous.
         self.finger_spacing_spin = _spin(0.0, 5000.0, 0.0)
         self.finger_spacing_spin.setSpecialValueText("Contiguous (0 = no gap)")
 
@@ -78,9 +76,9 @@ class HexLatticeDialog(QtWidgets.QDialog):
         form.addRow("Length (Y):",                  self.length_spin)
         form.addRow("Height (Z):",                  self.height_spin)
         form.addRow("Perimeter width:",             self.perim_spin)
-        form.addRow("Finger width\n(0 = same as perimeter):",
+        form.addRow("Joint width\n(0 = same as perimeter):",
                     self.joint_width_spin)
-        form.addRow("Finger spacing\n(0 = contiguous, no gap):",
+        form.addRow("Joint spacing\n(0 = contiguous, no gap):",
                     self.finger_spacing_spin)
         form.addRow("Joint depth\n(0 = half joint width):",
                     self.joint_depth_spin)
@@ -96,16 +94,16 @@ class HexLatticeDialog(QtWidgets.QDialog):
         # Info label (exposed as self._info_label so subclasses can update text)
         self._info_label = QtWidgets.QLabel(
             "<i>Parts wider/longer than <b>Max piece size</b> are automatically\n"
-            "sliced into interlocking finger-joint pieces for 3-D printing.\n"
-            "<b>Finger width</b> sets the width (mm) of each interlocking tab "
+            "sliced into interlocking joint pieces for 3-D printing.\n"
+            "<b>Joint width</b> sets the width (mm) of each interlocking tab "
             "(defaults to Perimeter width when 0). "
-            "<b>Finger spacing</b> sets the gap (mm) between consecutive fingers "
-            "— areas between fingers are flat. 0 means fingers are contiguous "
+            "<b>Joint spacing</b> sets the gap (mm) between consecutive joint tabs "
+            "— areas between tabs are flat. 0 means tabs are contiguous "
             "(no gap, fills the full face). "
-            "<b>Joint depth</b> controls how far each finger penetrates into the "
+            "<b>Joint depth</b> controls how far each tab penetrates into the "
             "adjacent piece: a smaller value leaves a solid base in the bridge "
             "band, forming a continuous support bar across the join "
-            "(0 = half of finger width). "
+            "(0 = half of joint width). "
             "<b>Support bar spacing</b> adds internal solid ribs every N mm in "
             "both X and Y for extra rigidity (0 = no ribs).</i>"
         )
@@ -181,14 +179,14 @@ class ShelfWithLegsDialog(HexLatticeDialog):
         # Update the shared info label text (avoids any duplicate-widget issues)
         self._info_label.setText(
             "<i>Parts wider/longer than <b>Max piece size</b> are automatically "
-            "sliced into interlocking finger-joint pieces for 3-D printing. "
-            "<b>Joint bridge width</b> controls the bridge band at cut lines and "
-            "the finger-joint tab size (defaults to Perimeter width when 0). "
-            "<b>Joint length</b> limits how much of each cut face carries finger "
-            "joints (0 = full face). "
-            "<b>Joint depth</b> controls how far each finger penetrates: smaller "
+            "sliced into interlocking joint pieces for 3-D printing. "
+            "<b>Joint width</b> controls the bridge band at cut lines and "
+            "the joint tab size (defaults to Perimeter width when 0). "
+            "<b>Joint spacing</b> sets the gap (mm) between consecutive joint "
+            "tabs — areas between tabs are flat; 0 = contiguous (no gap). "
+            "<b>Joint depth</b> controls how far each tab penetrates: smaller "
             "values leave a solid base in the bridge band across the join "
-            "(0 = half of joint bridge width). "
+            "(0 = half of joint width). "
             "<b>Support bar spacing</b> adds internal solid ribs every N mm (0 = none). "
             "<b>Leg width</b> must be smaller than <b>Perimeter width</b> so "
             "that the corner holes fit within the solid perimeter band. "
@@ -202,4 +200,55 @@ class ShelfWithLegsDialog(HexLatticeDialog):
         params = super().get_params()
         params["leg_height"] = self.leg_height_spin.value()
         params["leg_width"]  = self.leg_width_spin.value()
+        return params
+
+
+class BoxDialog(HexLatticeDialog):
+    """Modal dialog for open-top box creation parameters.
+
+    Extends :class:`HexLatticeDialog` with one additional field:
+
+    * **Box height** – interior height of the box walls (mm).  The printed
+      wall panels are ``thickness + box_height`` tall so they cover the bottom
+      panel's side face and extend up to the full box height.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Box")
+
+        def _spin(lo, hi, default, dec=1, suffix=" mm"):
+            w = QtWidgets.QDoubleSpinBox()
+            w.setRange(lo, hi)
+            w.setValue(default)
+            w.setDecimals(dec)
+            w.setSuffix(suffix)
+            return w
+
+        self.box_height_spin = _spin(5.0, 2000.0, 50.0)
+
+        # Insert box_height after height (index 2 in the form)
+        self._form.insertRow(3, "Box wall height:", self.box_height_spin)
+
+        self._info_label.setText(
+            "<i><b>Width</b>, <b>Length</b>, and <b>Height</b> set the outer "
+            "dimensions of the box floor (bottom panel). "
+            "<b>Box wall height</b> sets the interior height of the walls. "
+            "All pieces are printed flat (no supports needed). "
+            "The four wall panels slide horizontally into the bottom panel's "
+            "edge joints and are locked against vertical movement by the "
+            "alternating step-joint pattern. "
+            "Parts wider/longer than <b>Max piece size</b> are automatically "
+            "sliced into interlocking joint pieces. "
+            "<b>Joint width</b> sets the tab width (defaults to Perimeter width "
+            "when 0). "
+            "<b>Joint depth</b> controls tab penetration depth "
+            "(0 = half of joint width).</i>"
+        )
+
+    # ------------------------------------------------------------------
+    def get_params(self) -> dict:
+        """Return dialog values including box wall height."""
+        params = super().get_params()
+        params["box_height"] = self.box_height_spin.value()
         return params

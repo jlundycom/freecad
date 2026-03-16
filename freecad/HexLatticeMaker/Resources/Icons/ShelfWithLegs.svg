@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Shelf panel (top horizontal band) -->
+  <rect x="4" y="8" width="56" height="18" rx="3"
+        fill="#1a7a5a" stroke="#0e4d38" stroke-width="1.5"/>
+  <!-- Hex holes in shelf panel -->
+  <polygon points="20,11 24,13 24,19 20,21 16,19 16,13"
+           fill="none" stroke="#6dd5b5" stroke-width="1.4"/>
+  <polygon points="32,11 36,13 36,19 32,21 28,19 28,13"
+           fill="none" stroke="#6dd5b5" stroke-width="1.4"/>
+  <polygon points="44,11 48,13 48,19 44,21 40,19 40,13"
+           fill="none" stroke="#6dd5b5" stroke-width="1.4"/>
+  <!-- Four corner legs hanging below the shelf -->
+  <!-- Bottom-left leg -->
+  <rect x="6"  y="28" width="10" height="28" rx="2"
+        fill="#0e8c60" stroke="#07523a" stroke-width="1.2"/>
+  <!-- Bottom-right leg -->
+  <rect x="48" y="28" width="10" height="28" rx="2"
+        fill="#0e8c60" stroke="#07523a" stroke-width="1.2"/>
+  <!-- Top-left leg (slightly inset) -->
+  <rect x="16" y="28" width="8" height="22" rx="2"
+        fill="#0e8c60" stroke="#07523a" stroke-width="1.2" opacity="0.7"/>
+  <!-- Top-right leg (slightly inset) -->
+  <rect x="40" y="28" width="8" height="22" rx="2"
+        fill="#0e8c60" stroke="#07523a" stroke-width="1.2" opacity="0.7"/>
+  <!-- Connector nubs (pegs) at top of each leg -->
+  <rect x="9"  y="24" width="4" height="4" rx="1" fill="#6dd5b5"/>
+  <rect x="51" y="24" width="4" height="4" rx="1" fill="#6dd5b5"/>
+  <rect x="19" y="24" width="3" height="4" rx="1" fill="#6dd5b5"/>
+  <rect x="42" y="24" width="3" height="4" rx="1" fill="#6dd5b5"/>
+</svg>

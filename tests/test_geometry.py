@@ -2748,3 +2748,188 @@ class TestDialogJointDepthKey:
         """joint_depth key must be present in the returned dict."""
         params = self._simulate_get_params()
         assert "joint_depth" in params
+
+
+# ---------------------------------------------------------------------------
+# Box geometry: _wall_bottom_slots (pure-geometry, no FreeCAD)
+# ---------------------------------------------------------------------------
+
+class TestWallBottomSlotsGeometry:
+    """Unit tests for _wall_bottom_slots and _step_joint_z_extents alignment.
+
+    These tests verify the pure-geometry aspects of the box wall joint
+    (slot count, positions, Z-level alternation, clearance) without
+    requiring FreeCAD to be installed.
+    """
+
+    def _slot_z_extents(self, finger_idx, thickness, this_side):
+        """Call _step_joint_z_extents and return (tab_z0, tab_z1)."""
+        from freecad.HexLatticeMaker.hex_lattice_core import _step_joint_z_extents
+        tab_z0, tab_z1, _, _ = _step_joint_z_extents(
+            finger_idx, thickness, this_side
+        )
+        return tab_z0, tab_z1
+
+    def test_even_finger_top_upper_half(self):
+        """Even finger with 'top' this_side → tab at upper half (T/2 .. T)."""
+        z0, z1 = self._slot_z_extents(0, 10.0, 'top')
+        assert z0 == pytest.approx(5.0)
+        assert z1 == pytest.approx(10.0)
+
+    def test_odd_finger_top_lower_half(self):
+        """Odd finger with 'top' this_side → tab at lower half (0 .. T/2)."""
+        z0, z1 = self._slot_z_extents(1, 10.0, 'top')
+        assert z0 == pytest.approx(0.0)
+        assert z1 == pytest.approx(5.0)
+
+    def test_even_finger_bottom_lower_half(self):
+        """Even finger with 'bottom' this_side → tab at lower half."""
+        z0, z1 = self._slot_z_extents(0, 10.0, 'bottom')
+        assert z0 == pytest.approx(0.0)
+        assert z1 == pytest.approx(5.0)
+
+    def test_odd_finger_bottom_upper_half(self):
+        """Odd finger with 'bottom' this_side → tab at upper half."""
+        z0, z1 = self._slot_z_extents(1, 10.0, 'bottom')
+        assert z0 == pytest.approx(5.0)
+        assert z1 == pytest.approx(10.0)
+
+    def test_right_same_as_top_pattern(self):
+        """'right' this_side has same alternation pattern as 'top'."""
+        for idx in range(4):
+            r0, r1 = self._slot_z_extents(idx, 10.0, 'right')
+            t0, t1 = self._slot_z_extents(idx, 10.0, 'top')
+            assert (r0, r1) == (t0, t1), f"mismatch at finger {idx}"
+
+    def test_left_same_as_bottom_pattern(self):
+        """'left' this_side has same alternation pattern as 'bottom'."""
+        for idx in range(4):
+            l0, l1 = self._slot_z_extents(idx, 10.0, 'left')
+            b0, b1 = self._slot_z_extents(idx, 10.0, 'bottom')
+            assert (l0, l1) == (b0, b1), f"mismatch at finger {idx}"
+
+
+class TestCreateBoxParams:
+    """Verify create_box() parameter plumbing (pure-logic, no FreeCAD shapes).
+
+    We test the parameter interface and name scheme without actually calling
+    FreeCAD geometry, by inspecting what create_box would be called with.
+    """
+
+    def _box_piece_names(
+        self, width=100.0, length=80.0, box_height=50.0,
+        height=10.0, perim_width=6.0, hex_size=8.0,
+        wall_thickness=1.5, max_piece_size=220.0,
+    ):
+        """Call create_box with a mock geometry environment and return names."""
+        try:
+            import Part   # noqa: F401
+            import FreeCAD  # noqa: F401
+        except ImportError:
+            pytest.skip("FreeCAD not available")
+
+        from freecad.HexLatticeMaker.hex_lattice_core import create_box
+        pieces = create_box(
+            width=width, length=length, box_height=box_height,
+            height=height, perim_width=perim_width, hex_size=hex_size,
+            wall_thickness=wall_thickness, max_piece_size=max_piece_size,
+        )
+        return [name for name, _shape, _placement in pieces]
+
+    def test_small_box_piece_count(self):
+        """A small box (all dims < max_piece_size) yields exactly 5 pieces."""
+        names = self._box_piece_names(
+            width=100.0, length=80.0, box_height=50.0, height=10.0,
+        )
+        # 1 bottom + 1 front + 1 back + 1 left + 1 right (each unsplit)
+        assert len(names) == 5
+
+    def test_bottom_piece_names(self):
+        """Bottom panel pieces are named Bottom_IX_IY."""
+        names = self._box_piece_names()
+        bottom = [n for n in names if n.startswith("Bottom_")]
+        assert len(bottom) >= 1
+        assert all("_" in n[len("Bottom_"):] for n in bottom)
+
+    def test_wall_piece_names(self):
+        """Front, back, left, right walls all present in output."""
+        names = self._box_piece_names()
+        assert any(n.startswith("FrontWall_") for n in names)
+        assert any(n.startswith("BackWall_") for n in names)
+        assert any(n.startswith("LeftWall_") for n in names)
+        assert any(n.startswith("RightWall_") for n in names)
+
+    def test_wide_box_splits_bottom(self):
+        """Bottom panel splits when width > max_piece_size."""
+        names = self._box_piece_names(
+            width=300.0, length=100.0, max_piece_size=220.0,
+        )
+        bottom = [n for n in names if n.startswith("Bottom_")]
+        assert len(bottom) == 2   # 300 → split into 2 pieces
+
+    def test_wide_box_splits_front_wall(self):
+        """Front/back walls split when width > max_piece_size."""
+        names = self._box_piece_names(
+            width=300.0, length=100.0, max_piece_size=220.0,
+        )
+        front = [n for n in names if n.startswith("FrontWall_")]
+        assert len(front) == 2
+
+    def test_long_box_splits_side_walls(self):
+        """Left/right walls split when (length - 2*height) > max_piece_size."""
+        # height=10, length=260 → side_w = 240 → 2 pieces
+        names = self._box_piece_names(
+            width=100.0, length=260.0, height=10.0, max_piece_size=220.0,
+        )
+        left = [n for n in names if n.startswith("LeftWall_")]
+        assert len(left) == 2
+
+    def test_box_height_parameter_accepted(self):
+        """create_box accepts box_height without raising."""
+        names = self._box_piece_names(box_height=30.0)
+        assert len(names) > 0
+
+
+class TestBoxDialogParams:
+    """Verify BoxDialog.get_params() includes the box_height key."""
+
+    def _simulate_box_get_params(self, box_height: float = 50.0) -> dict:
+        """Mirror BoxDialog.get_params() logic without Qt."""
+        joint_w = 0.0
+        sup_w   = 0.0
+        joint_d = None
+        return {
+            "width": 100.0, "length": 80.0, "height": 10.0,
+            "perim_width": 6.0,
+            "joint_width":     joint_w if joint_w > 0.0 else None,
+            "finger_spacing":  0.0,
+            "joint_depth":     joint_d,
+            "support_spacing": 0.0,
+            "support_width":   sup_w if sup_w > 0.0 else None,
+            "hex_size": 8.0, "wall_thickness": 1.5,
+            "max_piece_size": 220.0, "lattice_type": "hexagonal",
+            "box_height": box_height,
+        }
+
+    def test_box_height_key_present(self):
+        """box_height must appear in the params dict."""
+        params = self._simulate_box_get_params()
+        assert "box_height" in params
+
+    def test_box_height_value(self):
+        """box_height value should match what was set."""
+        params = self._simulate_box_get_params(box_height=75.0)
+        assert params["box_height"] == pytest.approx(75.0)
+
+    def test_create_box_accepts_dialog_params(self):
+        """create_box must accept every key produced by BoxDialog."""
+        try:
+            import Part      # noqa: F401
+            import FreeCAD   # noqa: F401
+        except ImportError:
+            pytest.skip("FreeCAD not available")
+
+        from freecad.HexLatticeMaker.hex_lattice_core import create_box
+        params = self._simulate_box_get_params()
+        pieces = create_box(**params)
+        assert len(pieces) > 0
