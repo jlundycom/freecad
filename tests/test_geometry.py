@@ -2500,11 +2500,11 @@ class TestMakePieceParamDefaults:
         assert tab_w == 6.0
         assert tab_w != perim_w  # joint_w != perim_w in this scenario
 
-    def test_tab_d_is_half_joint_w(self):
-        """tab_d = joint_w * 0.5 (depth sub-parameter of joint_w)."""
-        joint_w = 7.0
-        tab_d   = joint_w * 0.5
-        assert tab_d == pytest.approx(3.5)
+    def test_tab_d_default_is_third_joint_w(self):
+        """Default tab_d = joint_w / 3 (leaves solid backing beyond tab tips)."""
+        joint_w = 6.0
+        tab_d   = joint_w / 3.0
+        assert tab_d == pytest.approx(2.0)
 
     def test_bridge_half_uses_joint_w_not_perim_w(self):
         """Bridge bands use joint_w/2, independent of perim_w."""
@@ -2636,25 +2636,25 @@ class TestJointDepth:
     """Tests verifying the joint_depth parameter logic.
 
     joint_depth controls how far each finger tab penetrates into the adjacent
-    piece (tab_d).  When joint_depth < joint_w * 0.5, solid material remains
-    beyond the tab tips inside the bridge band — forming a continuous support
-    bar across the cut line.  These tests exercise the pure-Python resolution
-    logic (mirroring make_piece()'s tab_d computation) without calling FreeCAD.
+    piece (tab_d).  The default (None or 0) uses joint_w / 3, which fills 2/3
+    of the bridge half-width and leaves 1/3 as a solid support bar behind the
+    slot.  These tests exercise the pure-Python resolution logic (mirroring
+    make_piece()'s tab_d computation) without calling FreeCAD.
     """
 
     def _resolve_tab_d(self, joint_w: float, joint_depth) -> float:
         """Mirrors the tab_d resolution logic in make_piece()."""
         return (joint_depth
                 if (joint_depth is not None and joint_depth > 0.0)
-                else joint_w * 0.5)
+                else joint_w / 3.0)
 
-    def test_none_depth_gives_half_joint_w(self):
-        """Default (None) → tab_d = joint_w / 2."""
-        assert self._resolve_tab_d(8.0, None) == pytest.approx(4.0)
+    def test_none_depth_gives_third_joint_w(self):
+        """Default (None) → tab_d = joint_w / 3."""
+        assert self._resolve_tab_d(9.0, None) == pytest.approx(3.0)
 
-    def test_zero_depth_gives_half_joint_w(self):
-        """0 depth (spinbox default) → same as None, tab_d = joint_w / 2."""
-        assert self._resolve_tab_d(8.0, 0.0) == pytest.approx(4.0)
+    def test_zero_depth_gives_third_joint_w(self):
+        """0 depth (spinbox default) → same as None, tab_d = joint_w / 3."""
+        assert self._resolve_tab_d(9.0, 0.0) == pytest.approx(3.0)
 
     def test_explicit_depth_used_directly(self):
         """Positive joint_depth is used as-is for tab_d."""
@@ -2674,7 +2674,7 @@ class TestJointDepth:
         assert solid_base == pytest.approx(2.0)
 
     def test_depth_equal_to_bridge_half_leaves_no_solid_base(self):
-        """When joint_depth == joint_w/2 (default), no solid base remains."""
+        """When joint_depth == joint_w/2, no solid base remains (not the default)."""
         joint_w    = 10.0
         joint_depth = 5.0              # exactly joint_w / 2
         bridge_half = joint_w * 0.5
@@ -2688,6 +2688,20 @@ class TestJointDepth:
         joint_depth = 4.0              # > joint_w / 2 = 3.0
         tab_d       = self._resolve_tab_d(joint_w, joint_depth)
         assert tab_d == pytest.approx(4.0)
+
+    def test_default_leaves_solid_backing(self):
+        """Default tab_d (joint_w/3) is less than bridge_half (joint_w/2),
+        ensuring solid material remains beyond the tab tips.
+        """
+        for joint_w in [4.0, 6.0, 10.0, 12.0]:
+            bridge_half = joint_w * 0.5
+            tab_d       = self._resolve_tab_d(joint_w, None)   # default
+            solid_base  = bridge_half - tab_d
+            assert solid_base > 0.0, (
+                f"Default tab_d ({tab_d}) must be < bridge_half ({bridge_half})"
+            )
+            # Solid backing should be exactly joint_w/6 (= bridge_half - joint_w/3)
+            assert solid_base == pytest.approx(joint_w / 6.0)
 
     def test_depth_independent_of_joint_w(self):
         """Different joint_w values don't affect an explicit joint_depth."""

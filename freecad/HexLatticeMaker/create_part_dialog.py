@@ -56,11 +56,12 @@ class HexLatticeDialog(QtWidgets.QDialog):
         self.finger_spacing_spin.setSpecialValueText("Contiguous (0 = no gap)")
 
         # joint_depth: how far each finger penetrates into the adjacent piece.
-        #   0 = use the default (= joint_width / 2, i.e. full bridge half-width).
-        #   A smaller positive value leaves solid material beyond the tab tips,
-        #   forming a continuous support bar across the cut line.
+        #   0 = use the default (= joint_width / 3).
+        #   Must be less than joint_width / 2 to leave solid material beyond
+        #   the tab tips; the bridge half-width is joint_width / 2, so values
+        #   at or above that cause fingers to reach the lattice void area.
         self.joint_depth_spin = _spin(0.0, 100.0, 0.0)
-        self.joint_depth_spin.setSpecialValueText("= Half joint width")
+        self.joint_depth_spin.setSpecialValueText("= One-third joint width")
 
         # Interior support bars
         self.support_spacing_spin = _spin(0.0, 5000.0, 0.0)
@@ -82,7 +83,7 @@ class HexLatticeDialog(QtWidgets.QDialog):
                     self.joint_width_spin)
         form.addRow("Finger spacing\n(0 = contiguous, no gap):",
                     self.finger_spacing_spin)
-        form.addRow("Joint depth\n(0 = half joint width):",
+        form.addRow("Joint depth\n(0 = one-third joint width):",
                     self.joint_depth_spin)
         form.addRow("Support bar spacing\n(0 = none):",
                     self.support_spacing_spin)
@@ -103,9 +104,10 @@ class HexLatticeDialog(QtWidgets.QDialog):
             "— areas between fingers are flat. 0 means fingers are contiguous "
             "(no gap, fills the full face). "
             "<b>Joint depth</b> controls how far each finger penetrates into the "
-            "adjacent piece: a smaller value leaves a solid base in the bridge "
-            "band, forming a continuous support bar across the join "
-            "(0 = half of finger width). "
+            "adjacent piece: a smaller value leaves more solid backing behind the "
+            "slot, preventing fingers from reaching lattice voids "
+            "(0 = one-third of finger width; must be less than half of finger "
+            "width to avoid fingers reaching the lattice void area). "
             "<b>Support bar spacing</b> adds internal solid ribs every N mm in "
             "both X and Y for extra rigidity (0 = no ribs).</i>"
         )

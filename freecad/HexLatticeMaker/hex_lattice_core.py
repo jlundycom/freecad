@@ -48,7 +48,9 @@ Finger joints — Stepped Shelf Style (default)
   Step geometry
   ~~~~~~~~~~~~~
   tab_w  = joint_w               (width of each finger along the face)
-  tab_d  = joint_w / 2           (depth of each tab into the adjacent piece)
+  tab_d  = joint_w / 3           (default depth of each tab; fingers fill 2/3 of
+                                   the bridge half-width, leaving 1/3 as solid
+                                   backing — override with the joint_depth param)
   fit    = FIT_CLEARANCE         (bilateral assembly clearance along the face)
   half_h = height / 2            (Z step boundary)
 
@@ -2002,7 +2004,12 @@ def make_piece(
                      Defaults to *joint_w* when not specified.
     joint_depth    : how far each finger tab penetrates into the adjacent
                      piece in the direction perpendicular to the cut face (mm).
-                     Defaults to ``None`` → ``joint_w * 0.5``.
+                     Must be less than ``joint_w / 2`` to leave solid backing
+                     beyond the tab tips (preventing fingers from reaching
+                     lattice voids in the adjacent piece).
+                     Defaults to ``None`` → ``joint_w / 3`` (fingers fill 2/3
+                     of the bridge half-width, leaving 1/3 as a solid support
+                     bar behind the slot).
     joint_style    : ``'step'`` (default) — alternating stepped shelf joints
                      that lock assembled pieces against vertical movement.
                      ``'taper'`` — legacy tapered box joints (draft angle in Z).
@@ -2017,7 +2024,7 @@ def make_piece(
 
     tab_w  = joint_w
     tab_d  = (joint_depth if (joint_depth is not None and joint_depth > 0.0)
-              else joint_w * 0.5)
+              else joint_w / 3.0)
 
     # ------------------------------------------------------------------
     # 1. Base rectangular body
