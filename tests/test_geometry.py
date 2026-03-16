@@ -2837,13 +2837,12 @@ class TestCreateBoxParams:
         return [name for name, _shape in pieces]
 
     def test_small_box_piece_count(self):
-        """A small box (all dims < max_piece_size) yields exactly 9 pieces."""
+        """A small box (all dims < max_piece_size) yields exactly 5 pieces."""
         names = self._box_piece_names(
             width=100.0, length=80.0, box_height=50.0, height=10.0,
         )
-        # 1 bottom + 2 front/back + 2 left/right (each single piece)
-        # front: 1 piece, back: 1 piece, left: 1 piece, right: 1 piece, bottom: 1 piece
-        assert len(names) == 9
+        # 1 bottom + 1 front + 1 back + 1 left + 1 right (each unsplit)
+        assert len(names) == 5
 
     def test_bottom_piece_names(self):
         """Bottom panel pieces are named Bottom_IX_IY."""
