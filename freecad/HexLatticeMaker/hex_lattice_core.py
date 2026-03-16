@@ -2559,3 +2559,500 @@ def create_shelf_with_legs(
         ))
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Box geometry helpers and top-level entry point
+# ---------------------------------------------------------------------------
+
+def _wall_bottom_slots(
+    x0: float,
+    x1: float,
+    bottom_thickness: float,
+    tab_w: float,
+    tab_d: float,
+    bottom_this_side: str,
+    finger_spacing: float = 0.0,
+) -> list:
+    """Return slot shapes to be **cut** from a box wall panel's inner face.
+
+    The slots are in the wall's **printed-flat** coordinate system::
+
+        X  = x0 .. x1             (wall piece X bounds)
+        Y  = 0  .. bottom_thickness   (only the joint zone at the bottom edge)
+        Z  = 0  .. tab_d + FIT_CLEARANCE  (from the inner face, print_Z = 0)
+
+    When the wall panel is assembled (rotated 90° into a vertical position)
+    these slots receive the bottom panel's step-joint edge tabs, locking the
+    wall against vertical (Z) movement.
+
+    Parameters
+    ----------
+    x0, x1            : X bounds of this wall piece (global frame)
+    bottom_thickness   : thickness of the bottom panel = step half-height (mm)
+    tab_w              : joint tab width (mm)
+    tab_d              : joint tab depth / penetration (mm)
+    bottom_this_side   : the ``this_side`` value used by ``step_joint`` on
+                         the bottom panel for this edge.  Must be one of
+                         ``'top'``, ``'bottom'``, ``'left'``, ``'right'``.
+    finger_spacing     : gap between consecutive tabs (mm); ``0`` = contiguous.
+    """
+    import Part
+    import FreeCAD as App
+
+    fit = FIT_CLEARANCE
+    slt_depth = tab_d + fit
+
+    # Build finger start positions consistent with what step_joint uses for
+    # the bottom panel's matching edge (face_start=x0, face_end=x1).
+    face_len = x1 - x0
+    if finger_spacing > 0.0:
+        period = tab_w + finger_spacing
+        n_fingers = max(1, int((face_len + finger_spacing) / period))
+        total_span = n_fingers * tab_w + (n_fingers - 1) * finger_spacing
+        margin = max(0.0, (face_len - total_span) * 0.5)
+        finger_starts = [x0 + margin + i * period for i in range(n_fingers)]
+    else:
+        n_cont = max(1, int(face_len / tab_w) + 1)
+        finger_starts = [x0 + i * tab_w for i in range(n_cont)]
+
+    slots = []
+    for finger_idx, pos in enumerate(finger_starts):
+        seg_s = pos
+        seg_e = min(pos + tab_w, x1)
+        seg_l = seg_e - seg_s
+        if seg_l < tab_w * MIN_SEG_RATIO:
+            continue
+
+        # Slot face extent in X (minus assembly clearance, same as step_joint)
+        x_s = seg_s + fit * 0.5
+        x_l = seg_l - fit
+        if x_l <= _GEOM_EPS:
+            continue
+
+        # The slot must receive the bottom panel tab at these Z extents.
+        # _step_joint_z_extents gives (tab_z0, tab_z1, ...) for the bottom
+        # panel's this_side — our slot must span that same Z range (+fit).
+        tab_z0, tab_z1, _, _ = _step_joint_z_extents(
+            finger_idx, bottom_thickness, bottom_this_side
+        )
+        # In the wall's print-flat coords: print_Y = bottom-panel assembled Z
+        slt_y0 = tab_z0
+        slt_y1 = tab_z1 + fit
+
+        if slt_y1 - slt_y0 > _GEOM_EPS and slt_depth > _GEOM_EPS:
+            # Slot at X=[x_s..x_s+x_l], Y=[slt_y0..slt_y1], Z=[0..slt_depth]
+            # (Z=0 is the inner face, print-flat orientation)
+            slots.append(Part.makeBox(
+                x_l, slt_y1 - slt_y0, slt_depth,
+                App.Vector(x_s, slt_y0, 0.0)
+            ))
+
+    return slots
+
+
+def _make_box_wall_piece(
+    ix: int,
+    x0: float, x1: float,
+    total_w: float,
+    wall_printed_h: float,
+    bottom_thickness: float,
+    thickness: float,
+    perim_w: float,
+    hex_size: float,
+    wall_t: float,
+    x_cuts: list,
+    bottom_this_side: str,
+    lattice_type: str = "hexagonal",
+    joint_w: float = None,
+    finger_spacing: float = 0.0,
+    support_spacing: float = 0.0,
+    support_width: float = None,
+    joint_depth: float = None,
+    joint_style: str = "step",
+) -> object:  # Part.Shape
+    """Build one piece of a box wall panel.
+
+    The piece is in **print-flat orientation**::
+
+        X  = x0 .. x1              (wall width, horizontal split position)
+        Y  = 0  .. wall_printed_h  (= bottom_thickness + box_height)
+        Z  = 0  .. thickness       (= panel thickness / wall depth in assembly)
+
+    The bottom ``bottom_thickness`` mm (Y = 0 .. bottom_thickness) is kept
+    solid (no lattice holes) so the step-joint slots cut into the inner face
+    (Z = 0) have clean geometry.
+
+    Horizontal cuts (X direction) produce the same interlocking step joints as
+    flat panels.  There are no vertical (Y direction) cuts.
+    """
+    if joint_w is None:
+        joint_w = perim_w
+    tab_d = (joint_depth if (joint_depth is not None and joint_depth > 0.0)
+             else joint_w * 0.5)
+
+    # The joint zone (Y=0..bottom_thickness) is kept solid via a leg_zone so
+    # that the slot cuts always have material to work with.
+    joint_zone = [(0.0, 0.0, total_w, bottom_thickness)]
+
+    # Build the wall piece using make_piece (flat lattice panel, no Y splits).
+    shape = make_piece(
+        ix, 0,
+        x0, x1, 0.0, wall_printed_h,
+        total_w, wall_printed_h,
+        thickness, perim_w, hex_size,
+        wall_t,
+        x_cuts, [],          # no y_cuts
+        leg_zones=joint_zone,
+        lattice_type=lattice_type,
+        joint_w=joint_w,
+        finger_spacing=finger_spacing,
+        support_spacing=support_spacing,
+        support_width=support_width,
+        joint_depth=joint_depth,
+        joint_style=joint_style,
+    )
+
+    # Cut bottom-edge slots from the inner face (Z=0) at alternating Y levels.
+    slots = _wall_bottom_slots(
+        x0, x1,
+        bottom_thickness,
+        joint_w, tab_d,
+        bottom_this_side,
+        finger_spacing,
+    )
+    if slots:
+        shape = _cut_shapes(shape, slots)
+
+    return shape
+
+
+def _add_bottom_edge_tabs(
+    shape,
+    x0: float, x1: float,
+    y0: float, y1: float,
+    thickness: float,
+    tab_w: float,
+    tab_d: float,
+    this_side: str,
+    finger_spacing: float = 0.0,
+) -> object:
+    """Fuse step-joint tabs onto a bottom panel piece at one outer edge.
+
+    Used by :func:`create_box` to add wall-mating tabs on each exposed outer
+    face of the bottom panel.  Only the **tabs** (protruding shapes) are
+    fused; the complementary slots are omitted — wall panels carry only the
+    receiving slots (one-sided joint design).
+
+    The caller is responsible for choosing the correct *this_side*:
+
+    * ``'top'``    → front edge (Y = 0):  axis='y', cut_pos=0,  face=x0..x1
+    * ``'bottom'`` → back edge  (Y = L):  axis='y', cut_pos=y1, face=x0..x1
+    * ``'right'``  → left edge  (X = 0):  axis='x', cut_pos=0,  face=y0..y1
+    * ``'left'``   → right edge (X = W):  axis='x', cut_pos=x1, face=y0..y1
+
+    Parameters
+    ----------
+    shape          : existing Part.Shape of the bottom piece
+    x0, x1        : X bounds of this bottom piece
+    y0, y1        : Y bounds of this bottom piece (face range for left/right)
+    thickness      : bottom panel Z thickness (= step joint height)
+    tab_w          : joint tab width (mm)
+    tab_d          : joint tab penetration depth (mm)
+    this_side      : 'top', 'bottom', 'right', or 'left'
+    finger_spacing : gap between consecutive tabs (mm); 0 = contiguous
+    """
+    # Map this_side → (axis, cut_pos, face_start, face_end)
+    _edge_params = {
+        'top':    ('y', 0.0, x0,  x1),
+        'bottom': ('y', y1,  x0,  x1),
+        'right':  ('x', 0.0, y0,  y1),
+        'left':   ('x', x1,  y0,  y1),
+    }
+    axis, cut_pos, face_s, face_e = _edge_params[this_side]
+    tabs, _ = step_joint(axis, cut_pos, face_s, face_e,
+                         thickness, tab_w, tab_d, this_side,
+                         finger_spacing=finger_spacing)
+    if tabs:
+        shape = _fuse_shapes([shape] + tabs)
+    return shape
+
+
+def create_box(
+    width: float,
+    length: float,
+    box_height: float,
+    height: float,
+    perim_width: float,
+    hex_size: float,
+    wall_thickness: float = None,
+    max_piece_size: float = MAX_PIECE_SIZE,
+    lattice_type: str = "hexagonal",
+    joint_width: float = None,
+    finger_spacing: float = 0.0,
+    support_spacing: float = 0.0,
+    support_width: float = None,
+    joint_depth: float = None,
+    joint_style: str = "step",
+) -> list:
+    """Create all interlocking pieces for an open-top lattice box.
+
+    The box has five solid faces: a flat **bottom panel** and four **wall
+    panels** (front, back, left, right).  All pieces are designed to be
+    **printed flat** (large face on the print bed) with no support material.
+
+    Assembly
+    --------
+    Each wall slides **horizontally** (parallel to the bottom panel) into its
+    final position, engaging with step-joint tabs on the bottom panel's outer
+    edges.  The alternating stepped-shelf joint pattern locks every wall
+    against vertical movement once assembled, so the bottom panel is both
+    supported by and supports the walls — enabling the box to be hung upside-
+    down without the bottom falling out.
+
+    Piece anatomy
+    ~~~~~~~~~~~~~
+    * **Bottom** (``Bottom_IX_IY``): ``width × length × height`` flat panel.
+      Step-joint tabs protrude outward from all four edges to receive the
+      wall panels.  May be split into multiple pieces when larger than
+      *max_piece_size*.
+
+    * **Front / Back walls** (``FrontWall_I`` / ``BackWall_I``):
+      ``width × (height + box_height) × height`` flat panels.  The lower
+      ``height`` mm (in print-Y) is the joint zone with step-joint slots on
+      the inner face (print-Z = 0).  May be split horizontally.
+
+    * **Left / Right walls** (``LeftWall_I`` / ``RightWall_I``):
+      ``(length - 2 × height) × (height + box_height) × height`` flat panels.
+      Shorter than front/back so they fit between them during assembly.
+
+    Assembly order (suggested)::
+
+        1. Place bottom panel.
+        2. Slide front wall inward (+Y) until its inner face is flush with
+           the bottom panel's front edge.
+        3. Slide back wall inward (−Y).
+        4. Slide left wall inward (+X) — fits between front and back.
+        5. Slide right wall inward (−X).
+
+    Splitting long walls
+    ~~~~~~~~~~~~~~~~~~~~
+    Walls wider than *max_piece_size* are sliced at even intervals.  Each
+    split introduces a horizontal step joint (same as the bottom panel's
+    cut joints) that locks the sub-pieces against vertical movement.  The
+    horizontal split joints are perpendicular to the wall-bottom joint and
+    do not obstruct assembly.
+
+    Parameters
+    ----------
+    width, length : outer floor dimensions of the box (mm)
+    box_height    : interior wall height above the bottom panel (mm)
+    height        : panel material thickness (mm).  Used as the Z dimension
+                    of every printed piece.
+    perim_width   : solid outer perimeter width (mm).  Controls the lattice-
+                    free border on every panel and the bridge-band width at
+                    cut lines.
+    hex_size      : cell side length (mm)
+    wall_thickness: minimum cell-wall thickness (mm).
+                    Defaults to ``max(1.2, hex_size * 0.15)``.
+    max_piece_size: maximum printable piece length / width (mm).
+    lattice_type  : one of the keys in :data:`LATTICE_TYPES`
+                    (default ``"hexagonal"``).
+    joint_width   : joint tab width (mm).  Defaults to *perim_width*.
+    finger_spacing: gap between consecutive joint tabs (mm); 0 = contiguous.
+    support_spacing: spacing between interior support bars (mm); 0 = none.
+    support_width : support bar width (mm); defaults to *joint_width*.
+    joint_depth   : tab penetration depth (mm); ``None`` → ``joint_width / 2``.
+    joint_style   : ``'step'`` (default) or ``'taper'``.
+
+    Returns
+    -------
+    list of (name: str, shape: Part.Shape)
+        All pieces in print-flat orientation (no assembly placement offsets).
+        Names: ``Bottom_IX_IY``, ``FrontWall_I``, ``BackWall_I``,
+        ``LeftWall_I``, ``RightWall_I``.
+    """
+    _require_freecad()
+
+    if wall_thickness is None:
+        wall_thickness = max(1.2, hex_size * 0.15)
+
+    if joint_width is None:
+        joint_width = perim_width
+    tab_d = (joint_depth if (joint_depth is not None and joint_depth > 0.0)
+             else joint_width * 0.5)
+
+    T = height          # panel / wall thickness
+    W = width           # outer box width
+    L = length          # outer box length
+
+    # -----------------------------------------------------------------------
+    # 1. Bottom panel pieces (same as create_all_pieces, plus edge tabs)
+    # -----------------------------------------------------------------------
+    x_cuts_b = compute_cuts(W, max_piece_size)
+    y_cuts_b = compute_cuts(L, max_piece_size)
+    x_bounds_b = [0.0] + x_cuts_b + [W]
+    y_bounds_b = [0.0] + y_cuts_b + [L]
+
+    results = []
+
+    for ix, (bx0, bx1) in enumerate(zip(x_bounds_b[:-1], x_bounds_b[1:])):
+        for iy, (by0, by1) in enumerate(zip(y_bounds_b[:-1], y_bounds_b[1:])):
+            shape = make_piece(
+                ix, iy,
+                bx0, bx1, by0, by1,
+                W, L,
+                T, perim_width, hex_size,
+                wall_thickness,
+                x_cuts_b, y_cuts_b,
+                lattice_type=lattice_type,
+                joint_w=joint_width,
+                finger_spacing=finger_spacing,
+                support_spacing=support_spacing,
+                support_width=support_width,
+                joint_depth=joint_depth,
+                joint_style=joint_style,
+            )
+
+            # Add step-joint tabs on exposed outer edges so walls can lock in.
+            # Front edge (y = 0): bottom panel is 'top' of that cut.
+            if by0 < _GEOM_EPS:
+                shape = _add_bottom_edge_tabs(
+                    shape, bx0, bx1, by0, by1,
+                    T, joint_width, tab_d, 'top', finger_spacing,
+                )
+            # Back edge (y = L): bottom panel is 'bottom' of that cut.
+            if by1 > L - _GEOM_EPS:
+                shape = _add_bottom_edge_tabs(
+                    shape, bx0, bx1, by0, by1,
+                    T, joint_width, tab_d, 'bottom', finger_spacing,
+                )
+            # Left edge (x = 0): bottom panel is 'right' of that cut.
+            # Tabs only in the region between front/back walls (Y = T .. L-T).
+            if bx0 < _GEOM_EPS:
+                eff_y0 = max(by0, T)
+                eff_y1 = min(by1, L - T)
+                if eff_y1 > eff_y0 + _GEOM_EPS:
+                    shape = _add_bottom_edge_tabs(
+                        shape, bx0, bx1, eff_y0, eff_y1,
+                        T, joint_width, tab_d, 'right', finger_spacing,
+                    )
+            # Right edge (x = W): bottom panel is 'left' of that cut.
+            if bx1 > W - _GEOM_EPS:
+                eff_y0 = max(by0, T)
+                eff_y1 = min(by1, L - T)
+                if eff_y1 > eff_y0 + _GEOM_EPS:
+                    shape = _add_bottom_edge_tabs(
+                        shape, bx0, bx1, eff_y0, eff_y1,
+                        T, joint_width, tab_d, 'left', finger_spacing,
+                    )
+
+            results.append((f"Bottom_{ix}_{iy}", shape))
+
+    # -----------------------------------------------------------------------
+    # 2. Wall panels — all four walls, printed flat
+    # -----------------------------------------------------------------------
+    # Printed height of every wall = T (joint zone) + box_height (lattice zone)
+    wall_h = T + box_height
+
+    # Front wall: width = W, assembly direction +Y (bottom panel 'top' edge)
+    fw_x_cuts = compute_cuts(W, max_piece_size)
+    fw_x_bounds = [0.0] + fw_x_cuts + [W]
+    for i, (wx0, wx1) in enumerate(zip(fw_x_bounds[:-1], fw_x_bounds[1:])):
+        shape = _make_box_wall_piece(
+            i, wx0, wx1,
+            total_w=W,
+            wall_printed_h=wall_h,
+            bottom_thickness=T,
+            thickness=T,
+            perim_w=perim_width,
+            hex_size=hex_size,
+            wall_t=wall_thickness,
+            x_cuts=fw_x_cuts,
+            bottom_this_side='top',
+            lattice_type=lattice_type,
+            joint_w=joint_width,
+            finger_spacing=finger_spacing,
+            support_spacing=support_spacing,
+            support_width=support_width,
+            joint_depth=joint_depth,
+            joint_style=joint_style,
+        )
+        results.append((f"FrontWall_{i}", shape))
+
+    # Back wall: same width = W, assembly direction −Y (bottom panel 'bottom')
+    for i, (wx0, wx1) in enumerate(zip(fw_x_bounds[:-1], fw_x_bounds[1:])):
+        shape = _make_box_wall_piece(
+            i, wx0, wx1,
+            total_w=W,
+            wall_printed_h=wall_h,
+            bottom_thickness=T,
+            thickness=T,
+            perim_w=perim_width,
+            hex_size=hex_size,
+            wall_t=wall_thickness,
+            x_cuts=fw_x_cuts,
+            bottom_this_side='bottom',
+            lattice_type=lattice_type,
+            joint_w=joint_width,
+            finger_spacing=finger_spacing,
+            support_spacing=support_spacing,
+            support_width=support_width,
+            joint_depth=joint_depth,
+            joint_style=joint_style,
+        )
+        results.append((f"BackWall_{i}", shape))
+
+    # Left / Right walls: width = L - 2*T (fits between front/back walls).
+    # assembly direction +X for left ('right' edge of bottom), −X for right.
+    side_w = max(L - 2.0 * T, _GEOM_EPS)
+    sw_x_cuts = compute_cuts(side_w, max_piece_size)
+    sw_x_bounds = [0.0] + sw_x_cuts + [side_w]
+
+    for i, (wx0, wx1) in enumerate(zip(sw_x_bounds[:-1], sw_x_bounds[1:])):
+        # Left wall (bottom panel 'right' edge)
+        shape = _make_box_wall_piece(
+            i, wx0, wx1,
+            total_w=side_w,
+            wall_printed_h=wall_h,
+            bottom_thickness=T,
+            thickness=T,
+            perim_w=perim_width,
+            hex_size=hex_size,
+            wall_t=wall_thickness,
+            x_cuts=sw_x_cuts,
+            bottom_this_side='right',
+            lattice_type=lattice_type,
+            joint_w=joint_width,
+            finger_spacing=finger_spacing,
+            support_spacing=support_spacing,
+            support_width=support_width,
+            joint_depth=joint_depth,
+            joint_style=joint_style,
+        )
+        results.append((f"LeftWall_{i}", shape))
+
+    for i, (wx0, wx1) in enumerate(zip(sw_x_bounds[:-1], sw_x_bounds[1:])):
+        # Right wall (bottom panel 'left' edge)
+        shape = _make_box_wall_piece(
+            i, wx0, wx1,
+            total_w=side_w,
+            wall_printed_h=wall_h,
+            bottom_thickness=T,
+            thickness=T,
+            perim_w=perim_width,
+            hex_size=hex_size,
+            wall_t=wall_thickness,
+            x_cuts=sw_x_cuts,
+            bottom_this_side='left',
+            lattice_type=lattice_type,
+            joint_w=joint_width,
+            finger_spacing=finger_spacing,
+            support_spacing=support_spacing,
+            support_width=support_width,
+            joint_depth=joint_depth,
+            joint_style=joint_style,
+        )
+        results.append((f"RightWall_{i}", shape))
+
+    return results

@@ -147,6 +147,70 @@ def _build_shelf_with_legs(params: dict):
 
 
 # ---------------------------------------------------------------------------
+# Command: CreateBox
+# ---------------------------------------------------------------------------
+
+class CreateBoxCmd:
+    """FreeCAD command that opens the box dialog and creates all box pieces."""
+
+    def GetResources(self):
+        return {
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "MenuText": "Create Box",
+            "ToolTip":  (
+                "Create a hex-lattice open-top box whose five solid panels "
+                "(bottom + four walls) all print flat with no supports.  "
+                "Wall panels slide horizontally onto the bottom panel's edge "
+                "step-joints and lock against vertical movement."
+            ),
+        }
+
+    def IsActive(self):
+        return True   # always available
+
+    def Activated(self):
+        """Show dialog, then build and add shapes to the active document."""
+        try:
+            from .create_part_dialog import BoxDialog
+        except ImportError:
+            from create_part_dialog import BoxDialog
+
+        dlg = BoxDialog(Gui.getMainWindow())
+        if dlg.exec_() != dlg.Accepted:
+            return
+
+        params = dlg.get_params()
+        _build_box(params)
+
+
+def _build_box(params: dict):
+    """Build box pieces and add them to the FreeCAD document."""
+    from .hex_lattice_core import create_box
+
+    doc = App.activeDocument()
+    if doc is None:
+        doc = App.newDocument("HexLatticeBox")
+
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Creating box: "
+        f"{params['width']} × {params['length']} × {params['height']} mm "
+        f"(wall height={params['box_height']} mm) …\n"
+    )
+
+    pieces = create_box(**params)
+
+    for name, shape in pieces:
+        obj = doc.addObject("Part::Feature", name)
+        obj.Shape = shape
+
+    doc.recompute()
+    Gui.SendMsgToActiveView("ViewFit")
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Done – {len(pieces)} piece(s) created.\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Workbench definition
 # ---------------------------------------------------------------------------
 
@@ -163,12 +227,15 @@ class HexLatticeMakerWorkbench(Gui.Workbench):
     def Initialize(self):
         Gui.addCommand("HexLatticeMaker_CreatePart",      CreateHexLatticePartCmd())
         Gui.addCommand("HexLatticeMaker_CreateShelfLegs", CreateShelfWithLegsCmd())
+        Gui.addCommand("HexLatticeMaker_CreateBox",       CreateBoxCmd())
         self.appendToolbar("HexLatticeMaker",
                            ["HexLatticeMaker_CreatePart",
-                            "HexLatticeMaker_CreateShelfLegs"])
+                            "HexLatticeMaker_CreateShelfLegs",
+                            "HexLatticeMaker_CreateBox"])
         self.appendMenu("Hex Lattice",
                         ["HexLatticeMaker_CreatePart",
-                         "HexLatticeMaker_CreateShelfLegs"])
+                         "HexLatticeMaker_CreateShelfLegs",
+                         "HexLatticeMaker_CreateBox"])
         App.Console.PrintLog("[HexLatticeMaker] Workbench initialised.\n")
 
     def Activated(self):
