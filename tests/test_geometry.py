@@ -2834,7 +2834,7 @@ class TestCreateBoxParams:
             height=height, perim_width=perim_width, hex_size=hex_size,
             wall_thickness=wall_thickness, max_piece_size=max_piece_size,
         )
-        return [name for name, _shape in pieces]
+        return [name for name, _shape, _placement in pieces]
 
     def test_small_box_piece_count(self):
         """A small box (all dims < max_piece_size) yields exactly 5 pieces."""

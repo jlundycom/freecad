@@ -23,7 +23,7 @@ class CreateHexLatticePartCmd:
 
     def GetResources(self):
         return {
-            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticePart.svg"),
             "MenuText": "Create Hex Lattice Part",
             "ToolTip":  (
                 "Create a parametric flat part filled with a hexagonal lattice, "
@@ -88,7 +88,7 @@ class CreateShelfWithLegsCmd:
 
     def GetResources(self):
         return {
-            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "Pixmap":   os.path.join(_ICON_PATH, "ShelfWithLegs.svg"),
             "MenuText": "Create Shelf with Legs",
             "ToolTip":  (
                 "Create a hex-lattice shelf panel with corner holes and "
@@ -155,7 +155,7 @@ class CreateBoxCmd:
 
     def GetResources(self):
         return {
-            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeBox.svg"),
             "MenuText": "Create Box",
             "ToolTip":  (
                 "Create a hex-lattice open-top box whose five solid panels "
@@ -199,9 +199,10 @@ def _build_box(params: dict):
 
     pieces = create_box(**params)
 
-    for name, shape in pieces:
+    for name, shape, placement in pieces:
         obj = doc.addObject("Part::Feature", name)
         obj.Shape = shape
+        obj.Placement = placement
 
     doc.recompute()
     Gui.SendMsgToActiveView("ViewFit")

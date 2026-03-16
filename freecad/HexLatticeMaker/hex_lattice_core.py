@@ -2867,12 +2867,25 @@ def create_box(
 
     Returns
     -------
-    list of (name: str, shape: Part.Shape)
-        All pieces in print-flat orientation (no assembly placement offsets).
+    list of (name: str, shape: Part.Shape, placement: App.Placement)
+        Pieces in **assembled orientation**.  The bottom panel lies flat
+        at Z = 0 … T.  Each wall is placed vertically in its correct world
+        position so the assembled box is visible directly in FreeCAD.
+
+        Assembly placement summary::
+
+            Bottom_*   : identity  (X = 0…W, Y = 0…L, Z = 0…T)
+            FrontWall_*: outer face Y = −T,  inner face Y = 0
+            BackWall_* : inner face Y = L,   outer face Y = L+T
+            LeftWall_* : outer face X = −T,  inner face X = 0
+            RightWall_*: inner face X = W,   outer face X = W+T
+
+        The slicer is responsible for laying each piece flat for printing.
         Names: ``Bottom_IX_IY``, ``FrontWall_I``, ``BackWall_I``,
         ``LeftWall_I``, ``RightWall_I``.
     """
     _require_freecad()
+    import FreeCAD as App
 
     if wall_thickness is None:
         wall_thickness = max(1.2, hex_size * 0.15)
@@ -2886,6 +2899,28 @@ def create_box(
     W = width           # outer box width
     L = length          # outer box length
 
+    # Pre-compute assembly placements for each wall orientation.
+    #
+    # FreeCAD Placement: world_pos = Rotation * local_pos + Base
+    #
+    # Front wall — 90° around X-axis, no translation.
+    #   R_x90: (x,y,z) → (x, −z, y)
+    #   Inner face (local Z=0) → world Y=0; outer face → world Y=−T.
+    _rot_x90 = App.Rotation(App.Vector(1, 0, 0), 90)
+    _place_front = App.Placement(App.Vector(0.0, 0.0,   0.0), _rot_x90)
+    _place_back  = App.Placement(App.Vector(0.0, L + T, 0.0), _rot_x90)
+
+    # Right wall — 120° around (1,1,1): (x,y,z) → (z, x, y).
+    #   Inner face (local Z=0) → world X=W; outer face → world X=W+T.
+    _rot_r = App.Rotation(App.Vector(1,  1,  1), 120)
+    _place_right = App.Placement(App.Vector(W, T, 0.0), _rot_r)
+
+    # Left wall — 120° around (1,−1,−1): (x,y,z) → (−z, −x, y).
+    #   Inner face (local Z=0) → world X=0; outer face → world X=−T.
+    #   Span direction (local X) is reversed: piece X=0 lands at world Y=L−T.
+    _rot_l = App.Rotation(App.Vector(1, -1, -1), 120)
+    _place_left  = App.Placement(App.Vector(-T, T, 0.0), _rot_l)
+
     # -----------------------------------------------------------------------
     # 1. Bottom panel pieces (same as create_all_pieces, plus edge tabs)
     # -----------------------------------------------------------------------
@@ -2893,6 +2928,8 @@ def create_box(
     y_cuts_b = compute_cuts(L, max_piece_size)
     x_bounds_b = [0.0] + x_cuts_b + [W]
     y_bounds_b = [0.0] + y_cuts_b + [L]
+
+    _id_placement = App.Placement()   # identity — bottom panel stays flat
 
     results = []
 
@@ -2947,10 +2984,10 @@ def create_box(
                         T, joint_width, tab_d, 'left', finger_spacing,
                     )
 
-            results.append((f"Bottom_{ix}_{iy}", shape))
+            results.append((f"Bottom_{ix}_{iy}", shape, _id_placement))
 
     # -----------------------------------------------------------------------
-    # 2. Wall panels — all four walls, printed flat
+    # 2. Wall panels — built flat, placed in assembled orientation
     # -----------------------------------------------------------------------
     # Printed height of every wall = T (joint zone) + box_height (lattice zone)
     wall_h = T + box_height
@@ -2978,7 +3015,7 @@ def create_box(
             joint_depth=joint_depth,
             joint_style=joint_style,
         )
-        results.append((f"FrontWall_{i}", shape))
+        results.append((f"FrontWall_{i}", shape, _place_front))
 
     # Back wall: same width = W, assembly direction −Y (bottom panel 'bottom')
     for i, (wx0, wx1) in enumerate(zip(fw_x_bounds[:-1], fw_x_bounds[1:])):
@@ -3001,10 +3038,9 @@ def create_box(
             joint_depth=joint_depth,
             joint_style=joint_style,
         )
-        results.append((f"BackWall_{i}", shape))
+        results.append((f"BackWall_{i}", shape, _place_back))
 
     # Left / Right walls: width = L - 2*T (fits between front/back walls).
-    # assembly direction +X for left ('right' edge of bottom), −X for right.
     side_w = max(L - 2.0 * T, _GEOM_EPS)
     sw_x_cuts = compute_cuts(side_w, max_piece_size)
     sw_x_bounds = [0.0] + sw_x_cuts + [side_w]
@@ -3030,7 +3066,7 @@ def create_box(
             joint_depth=joint_depth,
             joint_style=joint_style,
         )
-        results.append((f"LeftWall_{i}", shape))
+        results.append((f"LeftWall_{i}", shape, _place_left))
 
     for i, (wx0, wx1) in enumerate(zip(sw_x_bounds[:-1], sw_x_bounds[1:])):
         # Right wall (bottom panel 'left' edge)
@@ -3053,6 +3089,6 @@ def create_box(
             joint_depth=joint_depth,
             joint_style=joint_style,
         )
-        results.append((f"RightWall_{i}", shape))
+        results.append((f"RightWall_{i}", shape, _place_right))
 
     return results
