@@ -2492,19 +2492,52 @@ class TestMakePieceParamDefaults:
             support_width = joint_w
         assert support_width == joint_w
 
-    def test_tab_w_equals_joint_w(self):
-        """tab_w must equal joint_w (not perim_w) once joint_w is resolved."""
+    @staticmethod
+    def _resolve_tab_w(joint_w: float, finger_w) -> float:
+        """Mirrors the tab_w resolution logic in make_piece()."""
+        return finger_w if (finger_w is not None and finger_w > 0.0) else joint_w
+
+    @staticmethod
+    def _resolve_tab_d(joint_w: float, joint_depth) -> float:
+        """Mirrors the tab_d resolution logic in make_piece()."""
+        return (joint_depth
+                if (joint_depth is not None and joint_depth > 0.0)
+                else joint_w / 3.0)
+
+    def test_tab_w_defaults_to_joint_w_when_finger_w_not_set(self):
+        """When finger_w is None, tab_w falls back to joint_w."""
         perim_w = 10.0
         joint_w = 6.0
-        tab_w   = joint_w        # as in make_piece()
-        assert tab_w == 6.0
+        tab_w = self._resolve_tab_w(joint_w, None)
+        assert tab_w == joint_w
         assert tab_w != perim_w  # joint_w != perim_w in this scenario
 
-    def test_tab_d_is_half_joint_w(self):
-        """tab_d = joint_w * 0.5 (depth sub-parameter of joint_w)."""
-        joint_w = 7.0
-        tab_d   = joint_w * 0.5
-        assert tab_d == pytest.approx(3.5)
+    def test_tab_w_uses_finger_w_when_set(self):
+        """When finger_w is provided, tab_w uses finger_w independently of joint_w."""
+        joint_w  = 10.0     # bridge width (solid line)
+        finger_w = 20.0     # tab width along cut face — wider than the bridge
+        tab_w = self._resolve_tab_w(joint_w, finger_w)
+        assert tab_w == pytest.approx(20.0)
+        assert tab_w != joint_w  # independent
+
+    def test_example_config_joint10_finger20_depth4(self):
+        """Verify the example from the issue: joint=10, finger_w=20, depth=4 → 1mm solid."""
+        joint_w     = 10.0
+        finger_w    = 20.0
+        joint_depth = 4.0
+        tab_w        = self._resolve_tab_w(joint_w, finger_w)
+        tab_d        = self._resolve_tab_d(joint_w, joint_depth)
+        bridge_half  = joint_w * 0.5
+        solid_backing = bridge_half - tab_d
+        assert tab_w          == pytest.approx(20.0)
+        assert tab_d          == pytest.approx(4.0)
+        assert solid_backing  == pytest.approx(1.0)
+
+    def test_tab_d_default_is_third_joint_w(self):
+        """Default tab_d = joint_w / 3 (leaves solid backing beyond tab tips)."""
+        joint_w = 6.0
+        tab_d   = self._resolve_tab_d(joint_w, None)
+        assert tab_d == pytest.approx(2.0)
 
     def test_bridge_half_uses_joint_w_not_perim_w(self):
         """Bridge bands use joint_w/2, independent of perim_w."""
@@ -2564,17 +2597,20 @@ class TestDialogParamKeys:
         self,
         perim=6.0,
         joint_w_val=0.0,        # 0 → None (fall back to perim)
+        tab_w_val=0.0,          # 0 → None (fall back to joint_w)
         finger_spacing_val=0.0,
         sup_spacing=0.0,
         sup_w_val=0.0,          # 0 → None (fall back to joint_w)
     ) -> dict:
         """Mirrors the get_params() logic in HexLatticeDialog."""
         joint_w = joint_w_val if joint_w_val > 0.0 else None
+        tab_w   = tab_w_val   if tab_w_val   > 0.0 else None
         sup_w   = sup_w_val   if sup_w_val   > 0.0 else None
         return {
             "width": 300.0, "length": 300.0, "height": 10.0,
             "perim_width":      perim,
             "joint_width":      joint_w,
+            "finger_w":         tab_w,
             "finger_spacing":   finger_spacing_val,
             "support_spacing":  sup_spacing,
             "support_width":    sup_w,
@@ -2591,6 +2627,23 @@ class TestDialogParamKeys:
         """joint_width spinbox value > 0 should appear as-is."""
         params = self._simulate_get_params(joint_w_val=4.0)
         assert params["joint_width"] == pytest.approx(4.0)
+
+    def test_tab_width_zero_returns_none(self):
+        """tab_width spinbox value 0 should produce None (fall back to joint_w)."""
+        params = self._simulate_get_params(tab_w_val=0.0)
+        assert params["finger_w"] is None
+
+    def test_tab_width_nonzero_returns_value(self):
+        """tab_width spinbox value > 0 should appear in the dict as-is."""
+        params = self._simulate_get_params(tab_w_val=20.0)
+        assert params["finger_w"] == pytest.approx(20.0)
+
+    def test_tab_width_independent_of_joint_width(self):
+        """finger_w and joint_width are truly independent in get_params()."""
+        params = self._simulate_get_params(joint_w_val=10.0, tab_w_val=20.0)
+        assert params["joint_width"] == pytest.approx(10.0)
+        assert params["finger_w"]    == pytest.approx(20.0)
+        assert params["joint_width"] != params["finger_w"]
 
     def test_support_width_zero_returns_none(self):
         """support_width spinbox value 0 should produce None in the dict."""
@@ -2620,10 +2673,10 @@ class TestDialogParamKeys:
         params = self._simulate_get_params(sup_spacing=50.0)
         assert params["support_spacing"] == pytest.approx(50.0)
 
-    def test_all_four_new_param_keys_present_in_dict(self):
-        """All four parameter keys must be in the returned dict."""
+    def test_all_joint_param_keys_present_in_dict(self):
+        """All joint-related parameter keys must be in the returned dict."""
         params = self._simulate_get_params()
-        for key in ("joint_width", "finger_spacing",
+        for key in ("joint_width", "finger_w", "finger_spacing",
                     "support_spacing", "support_width"):
             assert key in params, f"Key {key!r} missing from get_params()"
 
@@ -2636,25 +2689,25 @@ class TestJointDepth:
     """Tests verifying the joint_depth parameter logic.
 
     joint_depth controls how far each finger tab penetrates into the adjacent
-    piece (tab_d).  When joint_depth < joint_w * 0.5, solid material remains
-    beyond the tab tips inside the bridge band — forming a continuous support
-    bar across the cut line.  These tests exercise the pure-Python resolution
-    logic (mirroring make_piece()'s tab_d computation) without calling FreeCAD.
+    piece (tab_d).  The default (None or 0) uses joint_w / 3, which fills 2/3
+    of the bridge half-width and leaves 1/3 as a solid support bar behind the
+    slot.  These tests exercise the pure-Python resolution logic (mirroring
+    make_piece()'s tab_d computation) without calling FreeCAD.
     """
 
     def _resolve_tab_d(self, joint_w: float, joint_depth) -> float:
         """Mirrors the tab_d resolution logic in make_piece()."""
         return (joint_depth
                 if (joint_depth is not None and joint_depth > 0.0)
-                else joint_w * 0.5)
+                else joint_w / 3.0)
 
-    def test_none_depth_gives_half_joint_w(self):
-        """Default (None) → tab_d = joint_w / 2."""
-        assert self._resolve_tab_d(8.0, None) == pytest.approx(4.0)
+    def test_none_depth_gives_third_joint_w(self):
+        """Default (None) → tab_d = joint_w / 3."""
+        assert self._resolve_tab_d(9.0, None) == pytest.approx(3.0)
 
-    def test_zero_depth_gives_half_joint_w(self):
-        """0 depth (spinbox default) → same as None, tab_d = joint_w / 2."""
-        assert self._resolve_tab_d(8.0, 0.0) == pytest.approx(4.0)
+    def test_zero_depth_gives_third_joint_w(self):
+        """0 depth (spinbox default) → same as None, tab_d = joint_w / 3."""
+        assert self._resolve_tab_d(9.0, 0.0) == pytest.approx(3.0)
 
     def test_explicit_depth_used_directly(self):
         """Positive joint_depth is used as-is for tab_d."""
@@ -2674,7 +2727,7 @@ class TestJointDepth:
         assert solid_base == pytest.approx(2.0)
 
     def test_depth_equal_to_bridge_half_leaves_no_solid_base(self):
-        """When joint_depth == joint_w/2 (default), no solid base remains."""
+        """When joint_depth == joint_w/2, no solid base remains (not the default)."""
         joint_w    = 10.0
         joint_depth = 5.0              # exactly joint_w / 2
         bridge_half = joint_w * 0.5
@@ -2688,6 +2741,20 @@ class TestJointDepth:
         joint_depth = 4.0              # > joint_w / 2 = 3.0
         tab_d       = self._resolve_tab_d(joint_w, joint_depth)
         assert tab_d == pytest.approx(4.0)
+
+    def test_default_leaves_solid_backing(self):
+        """Default tab_d (joint_w/3) is less than bridge_half (joint_w/2),
+        ensuring solid material remains beyond the tab tips.
+        """
+        for joint_w in [4.0, 6.0, 10.0, 12.0]:
+            bridge_half = joint_w * 0.5
+            tab_d       = self._resolve_tab_d(joint_w, None)   # default
+            solid_base  = bridge_half - tab_d
+            assert solid_base > 0.0, (
+                f"Default tab_d ({tab_d}) must be < bridge_half ({bridge_half})"
+            )
+            # Solid backing should be exactly joint_w/6 (= bridge_half - joint_w/3)
+            assert solid_base == pytest.approx(joint_w / 6.0)
 
     def test_depth_independent_of_joint_w(self):
         """Different joint_w values don't affect an explicit joint_depth."""
@@ -2720,12 +2787,14 @@ class TestDialogJointDepthKey:
     def _simulate_get_params(self, joint_d_val: float = 0.0) -> dict:
         """Mirrors the get_params() logic in HexLatticeDialog."""
         joint_w = 0.0
+        tab_w   = 0.0
         sup_w   = 0.0
         joint_d = joint_d_val if joint_d_val > 0.0 else None
         return {
             "width": 300.0, "length": 300.0, "height": 10.0,
             "perim_width": 6.0,
             "joint_width":     joint_w if joint_w > 0.0 else None,
+            "finger_w":        tab_w if tab_w > 0.0 else None,
             "finger_spacing":  0.0,
             "joint_depth":     joint_d,
             "support_spacing": 0.0,
