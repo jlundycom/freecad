@@ -2,6 +2,8 @@
 create_part_dialog.py
 ---------------------
 Qt dialog that prompts the user for hex-lattice part dimensions.
+
+Also contains :class:`GridfinityDialog` for the gridfinity box builder.
 """
 
 try:
@@ -219,3 +221,303 @@ class ShelfWithLegsDialog(HexLatticeDialog):
         params["leg_height"] = self.leg_height_spin.value()
         params["leg_width"]  = self.leg_width_spin.value()
         return params
+
+
+try:
+    from .gridfinity_core import GRIDFINITY_UNIT as _GF_UNIT
+except ImportError:
+    try:
+        from gridfinity_core import GRIDFINITY_UNIT as _GF_UNIT
+    except ImportError:
+        _GF_UNIT = 42.0  # fallback if module not yet available
+
+
+# ===========================================================================
+# Gridfinity Box Builder dialog
+# ===========================================================================
+
+class _ContainerTableWidget(QtWidgets.QWidget):
+    """Embedded widget that manages the list of container pocket specs.
+
+    Displays a :class:`~PySide2.QtWidgets.QTableWidget` with one row per
+    container.  Toolbar buttons allow the user to add a cylinder pocket, add
+    a rectangle pocket, or remove the currently selected row.
+    """
+
+    # Column indices
+    _COL_TYPE   = 0
+    _COL_X      = 1
+    _COL_Y      = 2
+    _COL_DEPTH  = 3
+    _COL_RADIUS = 4   # cylinder
+    _COL_WIDTH  = 5   # rectangle
+    _COL_LENGTH = 6   # rectangle
+
+    _HEADERS = ["Type", "X (mm)", "Y (mm)", "Depth (mm)",
+                "Radius (mm)", "Width (mm)", "Length (mm)"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self._table = QtWidgets.QTableWidget(0, len(self._HEADERS))
+        self._table.setHorizontalHeaderLabels(self._HEADERS)
+        self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self._table.setEditTriggers(QtWidgets.QAbstractItemView.AllEditTriggers)
+
+        btn_add_cyl  = QtWidgets.QPushButton("Add Cylinder")
+        btn_add_rect = QtWidgets.QPushButton("Add Rectangle")
+        btn_remove   = QtWidgets.QPushButton("Remove Selected")
+
+        btn_add_cyl.clicked.connect(self._add_cylinder)
+        btn_add_rect.clicked.connect(self._add_rectangle)
+        btn_remove.clicked.connect(self._remove_selected)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addWidget(btn_add_cyl)
+        btn_row.addWidget(btn_add_rect)
+        btn_row.addWidget(btn_remove)
+        btn_row.addStretch()
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._table)
+        layout.addLayout(btn_row)
+
+    # ------------------------------------------------------------------
+    def _add_cylinder(self):
+        row = self._table.rowCount()
+        self._table.insertRow(row)
+        self._table.setItem(row, self._COL_TYPE,   QtWidgets.QTableWidgetItem("cylinder"))
+        self._table.setItem(row, self._COL_X,      QtWidgets.QTableWidgetItem("21.0"))
+        self._table.setItem(row, self._COL_Y,      QtWidgets.QTableWidgetItem("21.0"))
+        self._table.setItem(row, self._COL_DEPTH,  QtWidgets.QTableWidgetItem("10.0"))
+        self._table.setItem(row, self._COL_RADIUS, QtWidgets.QTableWidgetItem("8.0"))
+        self._table.setItem(row, self._COL_WIDTH,  QtWidgets.QTableWidgetItem(""))
+        self._table.setItem(row, self._COL_LENGTH, QtWidgets.QTableWidgetItem(""))
+        # Make type cell read-only
+        item = self._table.item(row, self._COL_TYPE)
+        item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
+
+    def _add_rectangle(self):
+        row = self._table.rowCount()
+        self._table.insertRow(row)
+        self._table.setItem(row, self._COL_TYPE,   QtWidgets.QTableWidgetItem("rectangle"))
+        self._table.setItem(row, self._COL_X,      QtWidgets.QTableWidgetItem("21.0"))
+        self._table.setItem(row, self._COL_Y,      QtWidgets.QTableWidgetItem("21.0"))
+        self._table.setItem(row, self._COL_DEPTH,  QtWidgets.QTableWidgetItem("10.0"))
+        self._table.setItem(row, self._COL_RADIUS, QtWidgets.QTableWidgetItem(""))
+        self._table.setItem(row, self._COL_WIDTH,  QtWidgets.QTableWidgetItem("20.0"))
+        self._table.setItem(row, self._COL_LENGTH, QtWidgets.QTableWidgetItem("20.0"))
+        item = self._table.item(row, self._COL_TYPE)
+        item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
+
+    def _remove_selected(self):
+        rows = sorted(
+            {idx.row() for idx in self._table.selectedIndexes()},
+            reverse=True,
+        )
+        for row in rows:
+            self._table.removeRow(row)
+
+    # ------------------------------------------------------------------
+    def _cell_float(self, row: int, col: int, default: float = 0.0) -> float:
+        item = self._table.item(row, col)
+        if item is None or item.text().strip() == "":
+            return default
+        try:
+            return float(item.text())
+        except ValueError:
+            return default
+
+    def get_containers(self) -> list:
+        """Return a list of container spec dicts from the table contents."""
+        containers = []
+        for row in range(self._table.rowCount()):
+            ctype_item = self._table.item(row, self._COL_TYPE)
+            if ctype_item is None:
+                continue
+            ctype = ctype_item.text().strip().lower()
+
+            spec = {
+                "type":  ctype,
+                "x":     self._cell_float(row, self._COL_X,     21.0),
+                "y":     self._cell_float(row, self._COL_Y,     21.0),
+                "depth": self._cell_float(row, self._COL_DEPTH, 10.0),
+            }
+            if ctype == "cylinder":
+                spec["radius"] = self._cell_float(row, self._COL_RADIUS, 8.0)
+            else:
+                spec["width"]  = self._cell_float(row, self._COL_WIDTH,  20.0)
+                spec["length"] = self._cell_float(row, self._COL_LENGTH, 20.0)
+
+            containers.append(spec)
+        return containers
+
+
+class GridfinityDialog(QtWidgets.QDialog):
+    """Modal dialog for gridfinity box creation parameters.
+
+    Presents controls for:
+
+    * Grid size (X × Y units of ``GRIDFINITY_UNIT`` mm each)
+    * Box height, interior base height, and shell wall thickness
+    * An open-ended list of container pockets (cylinders or rectangles)
+    * Optional lid with configurable height
+    * Optional corner magnet holes with radius, depth, and corner pad
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Gridfinity Box")
+        self.setMinimumWidth(520)
+
+        # ── Helper ─────────────────────────────────────────────────────
+        def _int_spin(lo, hi, default):
+            w = QtWidgets.QSpinBox()
+            w.setRange(lo, hi)
+            w.setValue(default)
+            return w
+
+        def _spin(lo, hi, default, dec=1, suffix=" mm"):
+            w = QtWidgets.QDoubleSpinBox()
+            w.setRange(lo, hi)
+            w.setValue(default)
+            w.setDecimals(dec)
+            w.setSuffix(suffix)
+            return w
+
+        # ── Box dimensions ─────────────────────────────────────────────
+        self.grid_x_spin         = _int_spin(1, 50, 2)
+        self.grid_y_spin         = _int_spin(1, 50, 2)
+        self.box_height_spin     = _spin(5.0, 500.0,  42.0)
+        self.interior_h_spin     = _spin(1.0, 490.0,  21.0)
+        self.shell_spin          = _spin(0.5,  50.0,   2.0, dec=2)
+
+        # ── Container table ────────────────────────────────────────────
+        self._container_widget = _ContainerTableWidget()
+
+        # ── Lid ────────────────────────────────────────────────────────
+        self.lid_check      = QtWidgets.QCheckBox("Create lid")
+        self.lid_height_spin = _spin(0.5, 50.0, 2.0)
+        self.lid_height_spin.setEnabled(False)
+        self.lid_check.toggled.connect(self.lid_height_spin.setEnabled)
+
+        # ── Magnets ────────────────────────────────────────────────────
+        self.magnet_check      = QtWidgets.QCheckBox("Add corner magnet holes")
+        self.magnet_radius_spin = _spin(0.1, 20.0, 3.0, dec=2)
+        self.magnet_depth_spin  = _spin(0.1, 20.0, 2.0, dec=2)
+        self.corner_pad_spin    = _spin(0.0, 20.0, 1.0, dec=2)
+        for w in (self.magnet_radius_spin, self.magnet_depth_spin,
+                  self.corner_pad_spin):
+            w.setEnabled(False)
+        self.magnet_check.toggled.connect(self.magnet_radius_spin.setEnabled)
+        self.magnet_check.toggled.connect(self.magnet_depth_spin.setEnabled)
+        self.magnet_check.toggled.connect(self.corner_pad_spin.setEnabled)
+
+        # ── Layout ─────────────────────────────────────────────────────
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignRight)
+
+        # Grid X / Y on one row
+        grid_row = QtWidgets.QHBoxLayout()
+        grid_row.addWidget(self.grid_x_spin)
+        grid_row.addWidget(QtWidgets.QLabel("×"))
+        grid_row.addWidget(self.grid_y_spin)
+        grid_row.addStretch()
+        form.addRow(f"Grid size (X × Y units of {_GF_UNIT:.0f} mm):", grid_row)
+
+        form.addRow("Total box height:",                  self.box_height_spin)
+        form.addRow("Interior base height\n(solid, pockets cut into here):",
+                    self.interior_h_spin)
+        form.addRow("Shell thickness\n(walls & floor):",  self.shell_spin)
+
+        # Lid section
+        lid_layout = QtWidgets.QHBoxLayout()
+        lid_layout.addWidget(self.lid_check)
+        lid_layout.addWidget(QtWidgets.QLabel("  Height:"))
+        lid_layout.addWidget(self.lid_height_spin)
+        lid_layout.addStretch()
+        form.addRow("Lid:", lid_layout)
+
+        # Magnet section
+        magnet_layout = QtWidgets.QGridLayout()
+        magnet_layout.addWidget(self.magnet_check,  0, 0, 1, 4)
+        magnet_layout.addWidget(QtWidgets.QLabel("  Radius:"),   1, 0)
+        magnet_layout.addWidget(self.magnet_radius_spin,         1, 1)
+        magnet_layout.addWidget(QtWidgets.QLabel("  Depth:"),    1, 2)
+        magnet_layout.addWidget(self.magnet_depth_spin,          1, 3)
+        magnet_layout.addWidget(QtWidgets.QLabel("  Corner pad:"), 2, 0)
+        magnet_layout.addWidget(self.corner_pad_spin,              2, 1)
+        form.addRow("Magnets:", magnet_layout)
+
+        info = QtWidgets.QLabel(
+            f"<i><b>Grid size</b>: each unit is {_GF_UNIT:.0f} × {_GF_UNIT:.0f} mm. "
+            "<b>Interior base height</b>: the solid block inside the box into "
+            "which container pockets are carved from the top. "
+            "<b>Container pockets</b>: add cylinders or rectangles; their "
+            "shapes are kept as separate FreeCAD objects so they can be "
+            "adjusted after creation. "
+            "<b>Corner pad</b>: extra solid material added around each corner "
+            "magnet hole for structural support.</i>"
+        )
+        info.setWordWrap(True)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+
+        main = QtWidgets.QVBoxLayout(self)
+        main.addLayout(form)
+        main.addWidget(QtWidgets.QLabel("<b>Container pockets:</b>"))
+        main.addWidget(self._container_widget)
+        main.addWidget(info)
+        main.addWidget(buttons)
+
+    # ------------------------------------------------------------------
+    def _on_accept(self):
+        """Validate before accepting the dialog."""
+        # Basic sanity: interior_height must fit inside the box
+        shell = self.shell_spin.value()
+        ih    = self.interior_h_spin.value()
+        bh    = self.box_height_spin.value()
+        if shell + ih >= bh:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid dimensions",
+                "Shell thickness + interior base height must be less than "
+                "total box height (to leave an open cavity at the top).",
+            )
+            return
+        if self.magnet_check.isChecked():
+            md = self.magnet_depth_spin.value()
+            if md > shell:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Invalid magnet depth",
+                    f"Magnet depth ({md:.2f} mm) exceeds shell (floor) "
+                    f"thickness ({shell:.2f} mm). Reduce magnet depth or "
+                    "increase shell thickness.",
+                )
+                return
+        self.accept()
+
+    # ------------------------------------------------------------------
+    def get_params(self) -> dict:
+        """Return the dialog values as a plain dictionary."""
+        use_magnets = self.magnet_check.isChecked()
+        return {
+            "grid_x":           self.grid_x_spin.value(),
+            "grid_y":           self.grid_y_spin.value(),
+            "box_height":       self.box_height_spin.value(),
+            "interior_height":  self.interior_h_spin.value(),
+            "shell_thickness":  self.shell_spin.value(),
+            "containers":       self._container_widget.get_containers(),
+            "make_lid":         self.lid_check.isChecked(),
+            "lid_height":       self.lid_height_spin.value(),
+            "magnet_radius":    self.magnet_radius_spin.value() if use_magnets else 0.0,
+            "magnet_depth":     self.magnet_depth_spin.value()  if use_magnets else 0.0,
+            "corner_pad":       self.corner_pad_spin.value()    if use_magnets else 0.0,
+        }

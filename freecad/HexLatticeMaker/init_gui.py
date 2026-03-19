@@ -146,9 +146,88 @@ def _build_shelf_with_legs(params: dict):
     )
 
 
+
 # ---------------------------------------------------------------------------
-# Workbench definition
+# Command: CreateGridfinityBox
 # ---------------------------------------------------------------------------
+
+class CreateGridfinityBoxCmd:
+    """FreeCAD command that opens the Gridfinity dialog and creates the box."""
+
+    def GetResources(self):
+        return {
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "MenuText": "Create Gridfinity Box",
+            "ToolTip":  (
+                "Create a parametric Gridfinity-compatible storage box with "
+                "customisable interior pockets, optional lid, and optional "
+                "corner magnet holes."
+            ),
+        }
+
+    def IsActive(self):
+        return True   # always available
+
+    def Activated(self):
+        """Show dialog, then build and add shapes to the active document."""
+        try:
+            from .create_part_dialog import GridfinityDialog
+        except ImportError:
+            from create_part_dialog import GridfinityDialog
+
+        dlg = GridfinityDialog(Gui.getMainWindow())
+        if dlg.exec_() != dlg.Accepted:
+            return
+
+        params = dlg.get_params()
+        _build_gridfinity_box(params)
+
+
+def _build_gridfinity_box(params: dict):
+    """Build gridfinity box parts and add them to the FreeCAD document.
+
+    Container cutter shapes are added as individual named features (hidden by
+    default) so the user can inspect and adjust their parameters.  The box
+    body and optional lid are added as visible features.
+    """
+    try:
+        from .gridfinity_core import create_gridfinity_box, GRIDFINITY_UNIT
+    except ImportError:
+        from gridfinity_core import create_gridfinity_box, GRIDFINITY_UNIT
+
+    doc = App.activeDocument()
+    if doc is None:
+        doc = App.newDocument("GridfinityBox")
+
+    outer_x = params["grid_x"] * GRIDFINITY_UNIT
+    outer_y = params["grid_y"] * GRIDFINITY_UNIT
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Creating Gridfinity box "
+        f"{params['grid_x']} × {params['grid_y']} units "
+        f"({outer_x:.0f} × {outer_y:.0f} mm), "
+        f"height={params['box_height']} mm …\n"
+    )
+
+    pieces = create_gridfinity_box(**{k: v for k, v in params.items()})
+
+    for name, shape in pieces:
+        obj = doc.addObject("Part::Feature", name)
+        obj.Shape = shape
+        # Hide container cutter primitives by default; the box body is visible
+        if name.startswith("GF_Container_"):
+            obj.Visibility = False
+
+    doc.recompute()
+    Gui.SendMsgToActiveView("ViewFit")
+    container_count = sum(1 for n, _ in pieces if n.startswith("GF_Container_"))
+    has_lid = any(n == "GF_Lid" for n, _ in pieces)
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Done – Gridfinity box created "
+        f"with {container_count} container pocket(s)"
+        + (" + lid" if has_lid else "")
+        + ".\n"
+    )
+
 
 class HexLatticeMakerWorkbench(Gui.Workbench):
     """HexLatticeMaker workbench."""
@@ -163,12 +242,15 @@ class HexLatticeMakerWorkbench(Gui.Workbench):
     def Initialize(self):
         Gui.addCommand("HexLatticeMaker_CreatePart",      CreateHexLatticePartCmd())
         Gui.addCommand("HexLatticeMaker_CreateShelfLegs", CreateShelfWithLegsCmd())
+        Gui.addCommand("HexLatticeMaker_CreateGFBox",     CreateGridfinityBoxCmd())
         self.appendToolbar("HexLatticeMaker",
                            ["HexLatticeMaker_CreatePart",
-                            "HexLatticeMaker_CreateShelfLegs"])
+                            "HexLatticeMaker_CreateShelfLegs",
+                            "HexLatticeMaker_CreateGFBox"])
         self.appendMenu("Hex Lattice",
                         ["HexLatticeMaker_CreatePart",
-                         "HexLatticeMaker_CreateShelfLegs"])
+                         "HexLatticeMaker_CreateShelfLegs",
+                         "HexLatticeMaker_CreateGFBox"])
         App.Console.PrintLog("[HexLatticeMaker] Workbench initialised.\n")
 
     def Activated(self):
