@@ -49,8 +49,17 @@ The lid's magnet holes are drilled **upward** from the **bottom** face
 (z = 0) of the lid, so that when the lid sits on top of the box both sets
 of holes face each other and the magnets attract.
 
-Optional corner pads add a fused boss at each top corner so there is
-sufficient material around each hole.
+Corner pads and magnet-support ridges
+--------------------------------------
+When corner magnets are enabled a **full-height ridge** (spanning z = 0 to
+z = box_height) is fused at each corner.  Its XY footprint is
+``(shell_thickness + corner_pad) × (shell_thickness + corner_pad)``,
+centred on the magnet XY position.  The magnet hole is then drilled
+downward from the top of this ridge; the solid material immediately
+below the hole acts as a shelf that the magnet rests on when glued.
+Even when ``corner_pad = 0`` the ridge footprint equals the existing
+wall-corner material, so no visible geometry change occurs — but the
+fuse ensures the solid is present before the hole is drilled.
 
 Lid
 ---
@@ -162,6 +171,28 @@ def container_z_center(
     float: Z coordinate of the pocket centre in world space (mm)
     """
     return shell_thickness + interior_height - depth / 2.0
+
+
+def magnet_ridge_footprint(
+    shell_thickness: float,
+    corner_pad: float = 0.0,
+) -> float:
+    """Return the side length of the square corner ridge footprint (mm).
+
+    Each corner ridge is a square pillar of side
+    ``shell_thickness + corner_pad`` centred on the magnet XY position.
+    This pure helper makes the relationship testable without FreeCAD.
+
+    Parameters
+    ----------
+    shell_thickness : wall / floor thickness (mm)
+    corner_pad      : extra inward extension beyond the wall thickness (mm)
+
+    Returns
+    -------
+    float: side length of the square ridge cross-section (mm)
+    """
+    return shell_thickness + corner_pad
 
 
 def validate_container(spec: dict, outer_x: float, outer_y: float) -> list:
@@ -357,8 +388,11 @@ def make_gridfinity_box(
     magnet_radius    : radius of each corner magnet hole (mm); 0 = none
     magnet_depth     : depth of each corner magnet hole (mm); holes drilled
                        down from the top face (z = box_height)
-    corner_pad       : extra material fused at each top corner to provide
-                       more wall thickness around the magnet hole (mm)
+    corner_pad       : extra inward extension of the corner ridge (mm).
+                       Each corner gets a full-height ridge of footprint
+                       ``(shell_thickness + corner_pad)²``; the bottom of
+                       the magnet hole acts as a glue shelf for the magnet.
+                       Use 0 for no extra padding (ridge = wall corner only).
 
     Returns
     -------
@@ -395,20 +429,23 @@ def make_gridfinity_box(
         body = body.cut(air_cavity)
 
     # ------------------------------------------------------------------
-    # 3.  Apply corner pads at the TOP of the box to reinforce magnet holes
-    #     Each pad is a fused boss occupying the magnet-hole depth at each
-    #     top corner, extending inward by (shell_thickness + corner_pad).
+    # 3.  Fuse full-height corner ridges whenever magnets are active.
+    #
+    #     Each ridge spans z = 0 → z = box_height with a square footprint
+    #     of (shell_thickness + corner_pad)² centred on the magnet position.
+    #     The magnet hole (step 5) carves the top portion, leaving a solid
+    #     shelf immediately below the hole so the magnet can be glued in
+    #     place and rests on something solid.
     # ------------------------------------------------------------------
-    if corner_pad > 1e-9 and magnet_radius > 1e-9:
+    if magnet_radius > 1e-9:
         centres = magnet_corner_centres(outer_x, outer_y, shell_thickness, corner_pad)
         pad_size = shell_thickness + corner_pad
         for cx, cy in centres:
-            pad = Part.makeBox(
-                pad_size, pad_size, magnet_depth,
-                App.Vector(cx - pad_size / 2.0, cy - pad_size / 2.0,
-                           box_height - magnet_depth),
+            ridge = Part.makeBox(
+                pad_size, pad_size, box_height,
+                App.Vector(cx - pad_size / 2.0, cy - pad_size / 2.0, 0.0),
             )
-            body = body.fuse(pad)
+            body = body.fuse(ridge)
 
     # ------------------------------------------------------------------
     # 4.  Cut container pocket holes into the interior base
@@ -419,6 +456,8 @@ def make_gridfinity_box(
     # ------------------------------------------------------------------
     # 5.  Drill magnet holes downward from the TOP face (z = box_height)
     #     so that the lid's bottom-face magnets align with these holes.
+    #     The solid material below each hole (from step 3) acts as a shelf
+    #     on which the magnet rests when glued.
     # ------------------------------------------------------------------
     if magnet_radius > 1e-9 and magnet_depth > 1e-9:
         centres = magnet_corner_centres(outer_x, outer_y, shell_thickness, corner_pad)

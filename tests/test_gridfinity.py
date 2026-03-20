@@ -24,6 +24,7 @@ from freecad.HexLatticeMaker.gridfinity_core import (
     gridfinity_outer_dimensions,
     magnet_corner_centres,
     container_z_center,
+    magnet_ridge_footprint,
     validate_container,
 )
 
@@ -240,4 +241,46 @@ class TestContainerZCenter:
         z1 = container_z_center(2.0, 21.0, 10.0)
         z2 = container_z_center(4.0, 21.0, 10.0)
         assert z2 - z1 == pytest.approx(2.0)
+
+
+# ===========================================================================
+# magnet_ridge_footprint
+# ===========================================================================
+
+class TestMagnetRidgeFootprint:
+    def test_no_pad(self):
+        """With no corner pad, footprint equals shell_thickness."""
+        assert magnet_ridge_footprint(2.0, corner_pad=0.0) == pytest.approx(2.0)
+
+    def test_with_pad(self):
+        """Footprint equals shell_thickness + corner_pad."""
+        assert magnet_ridge_footprint(2.0, corner_pad=1.0) == pytest.approx(3.0)
+
+    def test_zero_pad_explicit(self):
+        assert magnet_ridge_footprint(3.0, corner_pad=0.0) == pytest.approx(3.0)
+
+    def test_returns_float(self):
+        result = magnet_ridge_footprint(2.0, corner_pad=1.5)
+        assert isinstance(result, float)
+
+    def test_larger_shell(self):
+        assert magnet_ridge_footprint(5.0, corner_pad=2.0) == pytest.approx(7.0)
+
+    def test_footprint_always_at_least_shell_thickness(self):
+        """Ridge footprint is always ≥ shell_thickness."""
+        for shell in [1.0, 2.0, 3.0, 5.0]:
+            for pad in [0.0, 0.5, 1.0, 2.0]:
+                fp = magnet_ridge_footprint(shell, corner_pad=pad)
+                assert fp >= shell
+
+    def test_ridge_centre_aligns_with_magnet_corner(self):
+        """The magnet centre and ridge centre coincide for known parameters."""
+        shell, pad = 2.0, 1.0
+        fp = magnet_ridge_footprint(shell, corner_pad=pad)
+        outer_x = 84.0
+        centres = magnet_corner_centres(outer_x, outer_x, shell, corner_pad=pad)
+        # bottom-left corner magnet is at (offset, offset)
+        cx, cy = centres[0]
+        # The ridge goes from cx - fp/2 to cx + fp/2; verify it starts at or before 0
+        assert cx - fp / 2.0 <= 0.0 + 1e-9
 
