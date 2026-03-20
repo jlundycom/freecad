@@ -49,13 +49,24 @@ The lid's magnet holes are drilled **upward** from the **bottom** face
 (z = 0) of the lid, so that when the lid sits on top of the box both sets
 of holes face each other and the magnets attract.
 
-Gridfinity base chamfer
------------------------
+Gridfinity base profile — outer chamfers and internal grid seams
+-----------------------------------------------------------------
 The outer bottom edges of the box carry a 45° chamfer of size
 ``GRIDFINITY_BASE_CHAMFER`` (2.15 mm, per the Gridfinity open standard).
 This chamfer allows the box to be placed on a standard Gridfinity baseplate
 and provides the characteristic stacking profile.  The chamfer is applied
 to all four outer bottom edges of the box body before any other operations.
+
+For multi-unit bins (grid_x > 1 or grid_y > 1), **internal grid seams** are
+also cut at every 42 mm boundary inside the bottom face.  Each seam is a
+V-shaped groove (depth = ``GRIDFINITY_BASE_CHAMFER``, 45° walls) that allows
+the bin to straddle the raised grid rails of a Gridfinity baseplate.  The
+positions are computed by :func:`gridfinity_base_seam_positions`:
+
+* X-direction seams at ``x = GRIDFINITY_UNIT, 2*GRIDFINITY_UNIT, …`` run the
+  full length of the box (Y direction).
+* Y-direction seams at ``y = GRIDFINITY_UNIT, 2*GRIDFINITY_UNIT, …`` run the
+  full width of the box (X direction).
 
 Corner magnet ridges — cylindrical, fully enclosed
 ---------------------------------------------------
@@ -218,6 +229,36 @@ def gridfinity_base_chamfer_size() -> float:
     float: ``GRIDFINITY_BASE_CHAMFER`` (2.15 mm)
     """
     return GRIDFINITY_BASE_CHAMFER
+
+
+def gridfinity_base_seam_positions(grid_x: int, grid_y: int) -> tuple:
+    """Return the X and Y positions of internal base-profile seams.
+
+    For multi-unit bins, V-shaped grooves are cut at every 42 mm grid
+    boundary inside the bottom face of the box.  Each groove has a depth of
+    ``GRIDFINITY_BASE_CHAMFER`` and 45° walls (total width = 2 ×
+    ``GRIDFINITY_BASE_CHAMFER``), allowing the bin to straddle the raised
+    grid rails of a Gridfinity baseplate.
+
+    A 1 × 1 bin has **no** internal seams (both lists are empty).
+
+    Parameters
+    ----------
+    grid_x : number of Gridfinity units in the X direction (≥ 1)
+    grid_y : number of Gridfinity units in the Y direction (≥ 1)
+
+    Returns
+    -------
+    ``(x_seams, y_seams)`` tuple of lists:
+
+    * ``x_seams`` — X coordinates of seams that run in the **Y** direction.
+      Values are ``GRIDFINITY_UNIT, 2*GRIDFINITY_UNIT, …, (grid_x-1)*GRIDFINITY_UNIT``.
+    * ``y_seams`` — Y coordinates of seams that run in the **X** direction.
+      Values are ``GRIDFINITY_UNIT, 2*GRIDFINITY_UNIT, …, (grid_y-1)*GRIDFINITY_UNIT``.
+    """
+    x_seams = [i * GRIDFINITY_UNIT for i in range(1, int(grid_x))]
+    y_seams = [j * GRIDFINITY_UNIT for j in range(1, int(grid_y))]
+    return (x_seams, y_seams)
 
 
 def magnet_ridge_radius(
@@ -513,6 +554,37 @@ def make_gridfinity_box(
         App.Vector(outer_x,     0.0, 0.0),
     ])
     body = body.cut(Part.Face(wire).extrude(App.Vector(0.0, outer_y, 0.0)))
+
+    # ------------------------------------------------------------------
+    # 1c. Internal grid seam V-grooves at every 42 mm boundary (multi-unit
+    #     bins only).  Each seam is a triangular prism groove of depth
+    #     GRIDFINITY_BASE_CHAMFER with 45° walls, cut into the bottom face
+    #     so the bin straddles the raised grid rails of the baseplate.
+    #
+    #     X-seams at x = 42, 84, … run the full length in the Y direction.
+    #     Y-seams at y = 42, 84, … run the full width in the X direction.
+    # ------------------------------------------------------------------
+    x_seams, y_seams = gridfinity_base_seam_positions(grid_x, grid_y)
+
+    for x_pos in x_seams:
+        # Triangle in XZ plane at y = 0: (x_pos-c, 0), apex (x_pos, c), (x_pos+c, 0)
+        wire = Part.makePolygon([
+            App.Vector(x_pos - c, 0.0, 0.0),
+            App.Vector(x_pos,     0.0, c),
+            App.Vector(x_pos + c, 0.0, 0.0),
+            App.Vector(x_pos - c, 0.0, 0.0),
+        ])
+        body = body.cut(Part.Face(wire).extrude(App.Vector(0.0, outer_y, 0.0)))
+
+    for y_pos in y_seams:
+        # Triangle in YZ plane at x = 0: (y_pos-c, 0), apex (y_pos, c), (y_pos+c, 0)
+        wire = Part.makePolygon([
+            App.Vector(0.0, y_pos - c, 0.0),
+            App.Vector(0.0, y_pos,     c),
+            App.Vector(0.0, y_pos + c, 0.0),
+            App.Vector(0.0, y_pos - c, 0.0),
+        ])
+        body = body.cut(Part.Face(wire).extrude(App.Vector(outer_x, 0.0, 0.0)))
 
     # ------------------------------------------------------------------
     # 2.  Cut out the open air cavity above the solid interior base

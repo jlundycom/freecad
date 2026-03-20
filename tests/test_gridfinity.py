@@ -24,6 +24,7 @@ from freecad.HexLatticeMaker.gridfinity_core import (
     GRIDFINITY_BASE_CHAMFER,
     gridfinity_outer_dimensions,
     gridfinity_base_chamfer_size,
+    gridfinity_base_seam_positions,
     magnet_corner_centres,
     container_z_center,
     magnet_ridge_radius,
@@ -307,6 +308,85 @@ class TestGridfinityBaseChamferSize:
 
     def test_positive(self):
         assert gridfinity_base_chamfer_size() > 0.0
+
+
+# ===========================================================================
+# gridfinity_base_seam_positions
+# ===========================================================================
+
+class TestGridfinityBaseSeamPositions:
+    def test_1x1_no_seams(self):
+        """A 1×1 bin has no internal seams."""
+        xs, ys = gridfinity_base_seam_positions(1, 1)
+        assert xs == []
+        assert ys == []
+
+    def test_2x1_one_x_seam(self):
+        xs, ys = gridfinity_base_seam_positions(2, 1)
+        assert xs == [pytest.approx(42.0)]
+        assert ys == []
+
+    def test_1x2_one_y_seam(self):
+        xs, ys = gridfinity_base_seam_positions(1, 2)
+        assert xs == []
+        assert ys == [pytest.approx(42.0)]
+
+    def test_2x2_one_seam_each(self):
+        xs, ys = gridfinity_base_seam_positions(2, 2)
+        assert xs == [pytest.approx(42.0)]
+        assert ys == [pytest.approx(42.0)]
+
+    def test_3x2_two_x_seams_one_y_seam(self):
+        xs, ys = gridfinity_base_seam_positions(3, 2)
+        assert xs == [pytest.approx(42.0), pytest.approx(84.0)]
+        assert ys == [pytest.approx(42.0)]
+
+    def test_4x3(self):
+        xs, ys = gridfinity_base_seam_positions(4, 3)
+        assert xs == [pytest.approx(42.0), pytest.approx(84.0), pytest.approx(126.0)]
+        assert ys == [pytest.approx(42.0), pytest.approx(84.0)]
+
+    def test_x_seam_count_is_grid_x_minus_1(self):
+        for gx in range(1, 6):
+            xs, _ = gridfinity_base_seam_positions(gx, 1)
+            assert len(xs) == gx - 1
+
+    def test_y_seam_count_is_grid_y_minus_1(self):
+        for gy in range(1, 6):
+            _, ys = gridfinity_base_seam_positions(1, gy)
+            assert len(ys) == gy - 1
+
+    def test_seam_spacing_equals_gridfinity_unit(self):
+        """Consecutive seams are exactly GRIDFINITY_UNIT apart."""
+        xs, ys = gridfinity_base_seam_positions(4, 4)
+        for i in range(1, len(xs)):
+            assert xs[i] - xs[i - 1] == pytest.approx(GRIDFINITY_UNIT)
+        for j in range(1, len(ys)):
+            assert ys[j] - ys[j - 1] == pytest.approx(GRIDFINITY_UNIT)
+
+    def test_seam_values_are_multiples_of_unit(self):
+        xs, ys = gridfinity_base_seam_positions(3, 3)
+        for i, x in enumerate(xs, start=1):
+            assert x == pytest.approx(i * GRIDFINITY_UNIT)
+        for j, y in enumerate(ys, start=1):
+            assert y == pytest.approx(j * GRIDFINITY_UNIT)
+
+    def test_seams_inside_box(self):
+        """All seam positions must be strictly inside the outer dimensions."""
+        gx, gy = 4, 3
+        outer_x, outer_y = gx * GRIDFINITY_UNIT, gy * GRIDFINITY_UNIT
+        xs, ys = gridfinity_base_seam_positions(gx, gy)
+        for x in xs:
+            assert 0.0 < x < outer_x
+        for y in ys:
+            assert 0.0 < y < outer_y
+
+    def test_returns_tuple_of_two_lists(self):
+        result = gridfinity_base_seam_positions(2, 2)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], list)
+        assert isinstance(result[1], list)
 
 
 # ===========================================================================
