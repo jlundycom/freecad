@@ -27,26 +27,50 @@ where ``floor_top = shell_thickness + interior_height``.
 Container holes are cut **downward** from ``floor_top`` into the solid interior
 base.  Their depth must not exceed ``interior_height``.
 
+Container shape placement
+-------------------------
+Every container cutter shape is built **centred at the local origin** (0, 0, 0)
+so that the FreeCAD Placement attribute controls its world position.  The
+``z`` component of the placement vector is the world Z of the cutter's
+geometric centre:
+
+  z_center = shell_thickness + interior_height - depth / 2
+
+See :func:`container_z_center` for the pure-Python helper.
+
 Magnet holes
 ------------
-Magnet holes are cylindrical pockets drilled **upward** from the bottom face
-(z = 0) of the box floor, one at each of the four corners.  Optional corner
-pads add extra solid material around each hole so there is sufficient wall
-thickness to hold the magnet securely.
+Magnet holes are cylindrical pockets drilled **downward** from the **top**
+face (z = box_height) of the box walls, one at each of the four corners.
+This positions the magnets at the rim where the lid rests, allowing the lid
+to attach magnetically.
+
+The lid's magnet holes are drilled **upward** from the **bottom** face
+(z = 0) of the lid, so that when the lid sits on top of the box both sets
+of holes face each other and the magnets attract.
+
+Optional corner pads add a fused boss at each top corner so there is
+sufficient material around each hole.
 
 Lid
 ---
 The lid is a flat rectangular plate that rests on top of the open box.  Its
 XY footprint equals the box outer footprint; its height is ``lid_height``.
-Optional magnet holes are drilled at the same XY corner centres used for the
-box.
+Optional magnet holes are drilled upward from the bottom face (z = 0) at
+the same XY corner centres used for the box.
 
-Primitives preservation
------------------------
-Container cutters and magnet-hole cutters are returned as independent shape
-objects from :func:`create_gridfinity_box`.  Callers should add them as
-separate ``Part::Feature`` document objects so the user can inspect and
-adjust their parameters after creation.
+Parametric Part::Cut chain
+--------------------------
+``create_gridfinity_box`` now returns a dict with:
+
+  ``box_body``    : box shape **without** any container cuts applied
+  ``containers``  : list of dicts {name, shape (at origin), placement (x,y,z)}
+  ``lid``         : optional lid shape (``None`` if not requested)
+
+The caller (:func:`_build_gridfinity_box` in ``init_gui.py``) creates each
+container as a ``Part::Feature`` with a ``Placement``, then chains
+``Part::Cut`` operations so that repositioning a container feature
+automatically updates the cut in the box.
 """
 
 import math
@@ -107,6 +131,37 @@ def magnet_corner_centres(
         (offset,              outer_y - offset),     # top-left
         (outer_x - offset,    outer_y - offset),     # top-right
     ]
+
+
+def container_z_center(
+    shell_thickness: float,
+    interior_height: float,
+    depth: float,
+) -> float:
+    """Return the world Z coordinate of the centre of a container pocket cutter.
+
+    The cutter occupies the Z range
+    ``[shell_thickness + interior_height - depth, shell_thickness + interior_height]``
+    so its Z centre is:
+
+    .. code-block:: text
+
+        z_center = shell_thickness + interior_height - depth / 2
+
+    This is the Z component used in the FreeCAD Placement for a container
+    shape that is built centred at the local origin.
+
+    Parameters
+    ----------
+    shell_thickness  : box floor / wall thickness (mm)
+    interior_height  : height of the solid interior base block (mm)
+    depth            : pocket depth (mm)
+
+    Returns
+    -------
+    float: Z coordinate of the pocket centre in world space (mm)
+    """
+    return shell_thickness + interior_height - depth / 2.0
 
 
 def validate_container(spec: dict, outer_x: float, outer_y: float) -> list:
@@ -172,11 +227,19 @@ def make_container_shape(
     interior_height: float,
     outer_x: float,
     outer_y: float,
-) -> object:  # Part.Shape
-    """Return a FreeCAD ``Part.Shape`` cutter for one container pocket.
+) -> tuple:
+    """Return a ``(shape, placement)`` pair for one container pocket cutter.
 
-    The cutter extends **downward** from the top of the solid interior base
-    (``z = shell_thickness + interior_height``) by ``spec['depth']``.
+    The shape is built **centred at the local origin** (0, 0, 0) so that it
+    can be added to a FreeCAD document as a ``Part::Feature`` and positioned
+    using its ``Placement`` attribute.  Moving the feature's Placement then
+    automatically updates any ``Part::Cut`` that references it.
+
+    The ``placement`` element is an ``(x, y, z)`` tuple giving the world
+    position of the shape centre:
+
+    * ``x``, ``y`` — the pocket XY centre from ``spec``
+    * ``z``        — :func:`container_z_center` for the pocket depth
 
     Parameters
     ----------
@@ -187,37 +250,37 @@ def make_container_shape(
 
     Returns
     -------
-    A ``Part.Shape`` that can be used as a boolean-cut cutter.
+    ``(shape, (x, y, z))`` where *shape* is centred at the local origin and
+    *(x, y, z)* is its world placement vector.
     """
     _require_freecad()
     import FreeCAD as App
     import Part
 
-    ctype = spec.get("type", "cylinder")
-    depth = float(spec.get("depth", 10.0))
-    x     = float(spec.get("x", outer_x / 2.0))
-    y     = float(spec.get("y", outer_y / 2.0))
-
-    # Cutter Z range: from top of interior base downward by depth
-    z_top = shell_thickness + interior_height
-    z_bot = z_top - depth
+    ctype  = spec.get("type", "cylinder")
+    depth  = float(spec.get("depth", 10.0))
+    cx     = float(spec.get("x", outer_x / 2.0))
+    cy     = float(spec.get("y", outer_y / 2.0))
+    z_ctr  = container_z_center(shell_thickness, interior_height, depth)
 
     if ctype == "cylinder":
         radius = float(spec.get("radius", 5.0))
+        # Cylinder centred at origin: z = -depth/2 … +depth/2
         shape = Part.makeCylinder(
             radius, depth,
-            App.Vector(x, y, z_bot),
+            App.Vector(0.0, 0.0, -depth / 2.0),
             App.Vector(0.0, 0.0, 1.0),
         )
     else:  # rectangle
         width  = float(spec.get("width",  10.0))
         length = float(spec.get("length", 10.0))
+        # Box centred at origin
         shape = Part.makeBox(
             width, length, depth,
-            App.Vector(x - width / 2.0, y - length / 2.0, z_bot),
+            App.Vector(-width / 2.0, -length / 2.0, -depth / 2.0),
         )
 
-    return shape
+    return shape, (cx, cy, z_ctr)
 
 
 def make_magnet_hole_shape(
@@ -225,21 +288,22 @@ def make_magnet_hole_shape(
     cy: float,
     radius: float,
     depth: float,
+    z_base: float = 0.0,
 ) -> object:  # Part.Shape
     """Return a cylindrical cutter for one magnet hole.
-
-    The cylinder is drilled **upward** from the bottom face (z = 0) of the
-    box floor.
 
     Parameters
     ----------
     cx, cy : XY centre of the magnet hole (mm)
     radius : radius of the cylindrical hole (mm)
     depth  : depth (height) of the hole (mm)
+    z_base : Z coordinate of the bottom of the cylinder (mm).
+             For box top-face holes pass ``box_height - depth``.
+             For lid bottom-face holes pass ``0.0`` (default).
 
     Returns
     -------
-    A ``Part.Shape`` cylinder positioned at the bottom face.
+    A ``Part.Shape`` cylinder.
     """
     _require_freecad()
     import FreeCAD as App
@@ -247,7 +311,7 @@ def make_magnet_hole_shape(
 
     return Part.makeCylinder(
         radius, depth,
-        App.Vector(cx, cy, 0.0),
+        App.Vector(cx, cy, z_base),
         App.Vector(0.0, 0.0, 1.0),
     )
 
@@ -267,7 +331,7 @@ def make_gridfinity_box(
 
     The box cross-section (viewed from the side) is::
 
-        z = box_height        ─── open top
+        z = box_height        ─── open top  (magnet holes drilled down from here)
         z = floor_top         ─── top of solid interior base (floor_top = shell + interior_h)
                               │ solid interior base │
         z = shell_thickness   ─── bottom of interior base / top of floor
@@ -277,7 +341,8 @@ def make_gridfinity_box(
     The four side walls run from z = 0 to z = box_height with thickness
     ``shell_thickness``.  The air cavity above the interior base is open to
     the top.  Container pockets are cut into the interior base from above.
-    Magnet holes are drilled upward from z = 0 at the four corners.
+    Magnet holes are drilled **downward** from the **top** face at the four
+    corners so that a lid with bottom-face magnet holes can attach.
 
     Parameters
     ----------
@@ -285,12 +350,15 @@ def make_gridfinity_box(
     box_height       : total external height (mm)
     interior_height  : height of the solid interior base block (mm)
     shell_thickness  : wall and floor thickness (mm)
-    container_cutters: list of ``Part.Shape`` cutters (from
-                       :func:`make_container_shape`); already computed so
-                       they are NOT recomputed here.
+    container_cutters: list of world-positioned ``Part.Shape`` cutters applied
+                       via boolean cut.  When using the parametric
+                       ``Part::Cut`` document workflow pass an empty list (the
+                       default) and apply cuts in the document instead.
     magnet_radius    : radius of each corner magnet hole (mm); 0 = none
-    magnet_depth     : depth of each corner magnet hole (mm)
-    corner_pad       : extra material added around each corner for magnets (mm)
+    magnet_depth     : depth of each corner magnet hole (mm); holes drilled
+                       down from the top face (z = box_height)
+    corner_pad       : extra material fused at each top corner to provide
+                       more wall thickness around the magnet hole (mm)
 
     Returns
     -------
@@ -327,15 +395,18 @@ def make_gridfinity_box(
         body = body.cut(air_cavity)
 
     # ------------------------------------------------------------------
-    # 3.  Apply corner pads (extra solid material around magnet corners)
+    # 3.  Apply corner pads at the TOP of the box to reinforce magnet holes
+    #     Each pad is a fused boss occupying the magnet-hole depth at each
+    #     top corner, extending inward by (shell_thickness + corner_pad).
     # ------------------------------------------------------------------
     if corner_pad > 1e-9 and magnet_radius > 1e-9:
         centres = magnet_corner_centres(outer_x, outer_y, shell_thickness, corner_pad)
-        pad_half = (shell_thickness + corner_pad) / 2.0
+        pad_size = shell_thickness + corner_pad
         for cx, cy in centres:
             pad = Part.makeBox(
-                pad_half * 2.0, pad_half * 2.0, shell_thickness,
-                App.Vector(cx - pad_half, cy - pad_half, 0.0),
+                pad_size, pad_size, magnet_depth,
+                App.Vector(cx - pad_size / 2.0, cy - pad_size / 2.0,
+                           box_height - magnet_depth),
             )
             body = body.fuse(pad)
 
@@ -346,12 +417,16 @@ def make_gridfinity_box(
         body = body.cut(cutter)
 
     # ------------------------------------------------------------------
-    # 5.  Drill magnet holes upward from the bottom face
+    # 5.  Drill magnet holes downward from the TOP face (z = box_height)
+    #     so that the lid's bottom-face magnets align with these holes.
     # ------------------------------------------------------------------
     if magnet_radius > 1e-9 and magnet_depth > 1e-9:
         centres = magnet_corner_centres(outer_x, outer_y, shell_thickness, corner_pad)
         for cx, cy in centres:
-            hole = make_magnet_hole_shape(cx, cy, magnet_radius, magnet_depth)
+            hole = make_magnet_hole_shape(
+                cx, cy, magnet_radius, magnet_depth,
+                z_base=box_height - magnet_depth,
+            )
             body = body.cut(hole)
 
     return body
@@ -369,8 +444,10 @@ def make_gridfinity_lid(
     """Build a flat lid for the gridfinity box.
 
     The lid is a solid rectangular plate whose XY footprint matches the box
-    outer dimensions.  Optional magnet holes are drilled downward from the
-    top face at the same corner positions used for the box.
+    outer dimensions.  Optional magnet holes are drilled **upward** from the
+    **bottom** face (z = 0) of the lid at the same corner positions used for
+    the box, so that the lid magnets align with the box top-face magnets when
+    the lid is placed on the box.
 
     Parameters
     ----------
@@ -378,7 +455,8 @@ def make_gridfinity_lid(
     shell_thickness : used only to compute magnet corner positions (mm)
     lid_height      : thickness of the lid plate (mm)
     magnet_radius   : radius of each corner magnet hole (mm); 0 = none
-    magnet_depth    : depth of each corner magnet hole (mm); drilled from top
+    magnet_depth    : depth of each corner magnet hole (mm); drilled from
+                      the **bottom** face (z = 0) upward
     corner_pad      : corner pad size matching the box (mm)
 
     Returns
@@ -393,16 +471,13 @@ def make_gridfinity_lid(
 
     lid = Part.makeBox(outer_x, outer_y, lid_height, App.Vector(0.0, 0.0, 0.0))
 
-    # Drill magnet holes from the *top* face downward
+    # Drill magnet holes upward from the *bottom* face (z = 0)
+    # so they face the matching holes in the box top face.
     if magnet_radius > 1e-9 and magnet_depth > 1e-9:
         centres = magnet_corner_centres(outer_x, outer_y, shell_thickness, corner_pad)
         for cx, cy in centres:
-            # Hole goes from z = lid_height down to z = lid_height - magnet_depth
-            hole = Part.makeCylinder(
-                magnet_radius, magnet_depth,
-                App.Vector(cx, cy, lid_height - magnet_depth),
-                App.Vector(0.0, 0.0, 1.0),
-            )
+            hole = make_magnet_hole_shape(cx, cy, magnet_radius, magnet_depth,
+                                          z_base=0.0)
             lid = lid.cut(hole)
 
     return lid
@@ -425,17 +500,33 @@ def create_gridfinity_box(
     magnet_radius: float = 0.0,
     magnet_depth: float = 0.0,
     corner_pad: float = 0.0,
-) -> list:
+) -> dict:
     """Create all shapes for a gridfinity storage box.
 
-    This is the primary entry point for callers.  It returns a flat list of
-    ``(name, shape)`` pairs — one for the box body, one for each container
-    cutter (so they are available as named FreeCAD objects that can be
-    adjusted), and optionally one for the lid.
+    This is the primary entry point for callers.  It returns a dict with
+    three keys:
 
-    Container cutter shapes are visible in the document tree and can be
-    re-positioned, resized, or deleted by the user.  The box body already
-    has the cuts applied.
+    ``box_body``
+        The finished box body shape **without** container cuts applied.
+        Container cuts are instead wired up as ``Part::Cut`` document objects
+        by the caller so that repositioning a container feature automatically
+        re-cuts the box.
+
+    ``containers``
+        List of dicts, one per container pocket::
+
+            {
+                "name":      str,          # e.g. "GF_Container_Cyl_1"
+                "shape":     Part.Shape,   # geometry centred at (0, 0, 0)
+                "placement": (x, y, z),    # world position of shape centre
+            }
+
+        The shape is centred at its local origin.  Callers should set
+        ``obj.Placement = App.Placement(App.Vector(*placement), App.Rotation())``
+        and then use ``Part::Cut`` to link the shape to the box body.
+
+    ``lid``
+        A ``Part.Shape`` for the lid, or ``None`` when *make_lid* is False.
 
     Parameters
     ----------
@@ -453,35 +544,30 @@ def create_gridfinity_box(
     make_lid         : if True, include a lid shape in the results
     lid_height       : thickness of the lid (mm)
     magnet_radius    : radius of corner magnet holes (mm); 0 = no magnets
-    magnet_depth     : depth of corner magnet holes (mm)
-    corner_pad       : extra material thickness added around corner magnet
-                       positions (mm); thickens corners for magnet support
+    magnet_depth     : depth of corner magnet holes (mm); drilled from the
+                       top of the box and from the bottom of the lid
+    corner_pad       : extra material thickness added at each top corner to
+                       support magnet holes (mm)
 
     Returns
     -------
-    list of ``(name: str, shape: Part.Shape)`` tuples:
-        * ``"GF_Box"``                         — the finished box body
-        * ``"GF_Container_Cyl_<N>"``           — each cylinder container cutter
-        * ``"GF_Container_Rect_<N>"``          — each rectangle container cutter
-        * ``"GF_Lid"`` (if make_lid is True)   — the lid plate
+    dict with keys ``"box_body"``, ``"containers"``, ``"lid"``.
     """
     _require_freecad()
 
     outer_x, outer_y = gridfinity_outer_dimensions(grid_x, grid_y)
-    results = []
 
     # ------------------------------------------------------------------
-    # Build container cutter shapes (kept as separate named primitives)
+    # Build container cutter shapes centred at origin with placement info
     # ------------------------------------------------------------------
     cyl_idx  = 1
     rect_idx = 1
-    container_cutters = []
+    container_specs = []
 
     for spec in (containers or []):
-        cutter = make_container_shape(
+        shape, placement = make_container_shape(
             spec, shell_thickness, interior_height, outer_x, outer_y
         )
-        container_cutters.append(cutter)
 
         ctype = spec.get("type", "cylinder")
         if ctype == "cylinder":
@@ -491,24 +577,29 @@ def create_gridfinity_box(
             name = f"GF_Container_Rect_{rect_idx}"
             rect_idx += 1
 
-        results.append((name, cutter))
+        container_specs.append({
+            "name":      name,
+            "shape":     shape,
+            "placement": placement,
+        })
 
     # ------------------------------------------------------------------
-    # Build box body (container cuts already applied inside make_gridfinity_box)
+    # Build box body WITHOUT container cuts (cuts applied via Part::Cut
+    # chain in the document so they remain parametric)
     # ------------------------------------------------------------------
     box_shape = make_gridfinity_box(
         grid_x, grid_y,
         box_height, interior_height, shell_thickness,
-        container_cutters=container_cutters,
+        container_cutters=[],   # cuts done via Part::Cut chain
         magnet_radius=magnet_radius,
         magnet_depth=magnet_depth,
         corner_pad=corner_pad,
     )
-    results.insert(0, ("GF_Box", box_shape))
 
     # ------------------------------------------------------------------
     # Optional lid
     # ------------------------------------------------------------------
+    lid_shape = None
     if make_lid:
         lid_shape = make_gridfinity_lid(
             grid_x, grid_y, shell_thickness,
@@ -517,6 +608,10 @@ def create_gridfinity_box(
             magnet_depth=magnet_depth,
             corner_pad=corner_pad,
         )
-        results.append(("GF_Lid", lid_shape))
 
-    return results
+    return {
+        "box_body":   box_shape,
+        "containers": container_specs,
+        "lid":        lid_shape,
+    }
+

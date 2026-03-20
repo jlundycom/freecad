@@ -23,6 +23,7 @@ from freecad.HexLatticeMaker.gridfinity_core import (
     GRIDFINITY_HEIGHT_UNIT,
     gridfinity_outer_dimensions,
     magnet_corner_centres,
+    container_z_center,
     validate_container,
 )
 
@@ -194,3 +195,49 @@ class TestValidateContainer:
         spec = {"type": "rectangle", "depth": 0.0, "width": 0.0, "length": 0.0}
         errors = validate_container(spec, *self._outer())
         assert len(errors) >= 3
+
+
+# ===========================================================================
+# container_z_center
+# ===========================================================================
+
+class TestContainerZCenter:
+    def test_basic(self):
+        # z_center = shell + interior - depth/2
+        z = container_z_center(shell_thickness=2.0, interior_height=21.0, depth=10.0)
+        assert z == pytest.approx(2.0 + 21.0 - 10.0 / 2.0)
+
+    def test_full_depth(self):
+        """When depth == interior_height, z_center == shell + interior/2."""
+        shell, ih = 2.0, 20.0
+        z = container_z_center(shell, ih, depth=ih)
+        assert z == pytest.approx(shell + ih / 2.0)
+
+    def test_shallow_pocket(self):
+        """Very shallow pocket: z_center close to top of interior base."""
+        shell, ih, depth = 2.0, 21.0, 1.0
+        z = container_z_center(shell, ih, depth)
+        assert z == pytest.approx(shell + ih - 0.5)
+
+    def test_z_center_below_floor_top(self):
+        """z_center must always be strictly below the top of the interior base."""
+        shell, ih, depth = 2.0, 21.0, 5.0
+        z = container_z_center(shell, ih, depth)
+        assert z < shell + ih
+
+    def test_z_center_above_floor(self):
+        """z_center must always be strictly above the floor."""
+        shell, ih, depth = 2.0, 21.0, 5.0
+        z = container_z_center(shell, ih, depth)
+        assert z > shell
+
+    def test_returns_float(self):
+        z = container_z_center(2.0, 21.0, 10.0)
+        assert isinstance(z, float)
+
+    def test_different_shell_thicknesses(self):
+        """z_center shifts by the same amount as shell_thickness changes."""
+        z1 = container_z_center(2.0, 21.0, 10.0)
+        z2 = container_z_center(4.0, 21.0, 10.0)
+        assert z2 - z1 == pytest.approx(2.0)
+

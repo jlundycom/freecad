@@ -186,9 +186,20 @@ class CreateGridfinityBoxCmd:
 def _build_gridfinity_box(params: dict):
     """Build gridfinity box parts and add them to the FreeCAD document.
 
-    Container cutter shapes are added as individual named features (hidden by
-    default) so the user can inspect and adjust their parameters.  The box
-    body and optional lid are added as visible features.
+    Workflow
+    --------
+    1. The raw box body (no container cuts) is added as a hidden
+       ``Part::Feature`` named ``GF_Box_Body``.
+    2. Each container pocket is added as a hidden ``Part::Feature`` with its
+       geometry centred at the local origin and its world position set via
+       the ``Placement`` attribute.
+    3. A chain of ``Part::Cut`` objects is built — one per container — so
+       that repositioning a container feature automatically updates the cut.
+       The last (or only) cut is named ``GF_Box`` and left visible.
+       Intermediate cuts are hidden.
+    4. If no containers are provided, ``GF_Box_Body`` is renamed ``GF_Box``
+       and made visible directly.
+    5. The optional lid (``GF_Lid``) is added as a separate visible feature.
     """
     try:
         from .gridfinity_core import create_gridfinity_box, GRIDFINITY_UNIT
@@ -208,19 +219,58 @@ def _build_gridfinity_box(params: dict):
         f"height={params['box_height']} mm …\n"
     )
 
-    pieces = create_gridfinity_box(**{k: v for k, v in params.items()})
+    result = create_gridfinity_box(**{k: v for k, v in params.items()})
 
-    for name, shape in pieces:
-        obj = doc.addObject("Part::Feature", name)
-        obj.Shape = shape
-        # Hide container cutter primitives by default; the box body is visible
-        if name.startswith("GF_Container_"):
-            obj.Visibility = False
+    # ------------------------------------------------------------------
+    # 1. Box body (uncut) – hidden so only the final cut is visible
+    # ------------------------------------------------------------------
+    box_body_obj = doc.addObject("Part::Feature", "GF_Box_Body")
+    box_body_obj.Shape = result["box_body"]
+    box_body_obj.Visibility = False
+
+    # ------------------------------------------------------------------
+    # 2. Container cutter features – geometry centred at origin,
+    #    positioned via Placement
+    # ------------------------------------------------------------------
+    container_objs = []
+    for cspec in result["containers"]:
+        cobj = doc.addObject("Part::Feature", cspec["name"])
+        cobj.Shape = cspec["shape"]
+        px, py, pz = cspec["placement"]
+        cobj.Placement = App.Placement(App.Vector(px, py, pz), App.Rotation())
+        cobj.Visibility = False
+        container_objs.append(cobj)
+
+    # ------------------------------------------------------------------
+    # 3. Part::Cut chain – each cut links a container to the previous result
+    #    so that moving the container updates the hole automatically
+    # ------------------------------------------------------------------
+    current_obj = box_body_obj
+    for i, cobj in enumerate(container_objs):
+        is_last  = (i == len(container_objs) - 1)
+        cut_name = "GF_Box" if is_last else f"GF_Cut_{i + 1}"
+        cut_obj  = doc.addObject("Part::Cut", cut_name)
+        cut_obj.Base = current_obj
+        cut_obj.Tool = cobj
+        cut_obj.Visibility = is_last
+        current_obj = cut_obj
+
+    # If no containers were added, the box body is the final object
+    if not container_objs:
+        box_body_obj.Label = "GF_Box"
+        box_body_obj.Visibility = True
+
+    # ------------------------------------------------------------------
+    # 4. Optional lid
+    # ------------------------------------------------------------------
+    if result.get("lid") is not None:
+        lid_obj = doc.addObject("Part::Feature", "GF_Lid")
+        lid_obj.Shape = result["lid"]
 
     doc.recompute()
     Gui.SendMsgToActiveView("ViewFit")
-    container_count = sum(1 for n, _ in pieces if n.startswith("GF_Container_"))
-    has_lid = any(n == "GF_Lid" for n, _ in pieces)
+    container_count = len(container_objs)
+    has_lid = result.get("lid") is not None
     App.Console.PrintMessage(
         f"[HexLatticeMaker] Done – Gridfinity box created "
         f"with {container_count} container pocket(s)"

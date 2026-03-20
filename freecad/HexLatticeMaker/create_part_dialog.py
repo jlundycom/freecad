@@ -231,6 +231,9 @@ except ImportError:
     except ImportError:
         _GF_UNIT = 42.0  # fallback if module not yet available
 
+# Default grid size used when no spinner reference is available
+_DEFAULT_GRID_SIZE = 2
+
 
 # ===========================================================================
 # Gridfinity Box Builder dialog
@@ -242,6 +245,12 @@ class _ContainerTableWidget(QtWidgets.QWidget):
     Displays a :class:`~PySide2.QtWidgets.QTableWidget` with one row per
     container.  Toolbar buttons allow the user to add a cylinder pocket, add
     a rectangle pocket, or remove the currently selected row.
+
+    Default XY positions for new containers are spread across the gridfinity
+    grid cells so that each new pocket lands in a different cell rather than
+    all defaulting to the same centre.  Pass *grid_x_ref* and *grid_y_ref*
+    (references to the parent dialog's grid-size spinners) so that the
+    computed default positions update when the grid size changes.
     """
 
     # Column indices
@@ -256,8 +265,10 @@ class _ContainerTableWidget(QtWidgets.QWidget):
     _HEADERS = ["Type", "X (mm)", "Y (mm)", "Depth (mm)",
                 "Radius (mm)", "Width (mm)", "Length (mm)"]
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, grid_x_ref=None, grid_y_ref=None):
         super().__init__(parent)
+        self._grid_x_ref = grid_x_ref
+        self._grid_y_ref = grid_y_ref
 
         self._table = QtWidgets.QTableWidget(0, len(self._HEADERS))
         self._table.setHorizontalHeaderLabels(self._HEADERS)
@@ -285,12 +296,32 @@ class _ContainerTableWidget(QtWidgets.QWidget):
         layout.addLayout(btn_row)
 
     # ------------------------------------------------------------------
+    def _next_default_xy(self) -> tuple:
+        """Return a spread (x, y) default position for the next new container.
+
+        Positions cycle through the centres of each gridfinity grid cell
+        in row-major order (left-to-right, bottom-to-top) so that successive
+        containers land in different cells rather than all overlapping.
+        """
+        row = self._table.rowCount()
+        gx = self._grid_x_ref.value() if self._grid_x_ref is not None else _DEFAULT_GRID_SIZE
+        gy = self._grid_y_ref.value() if self._grid_y_ref is not None else _DEFAULT_GRID_SIZE
+        total_cells = gx * gy
+        cell_idx = row % total_cells
+        cell_col = cell_idx % gx
+        cell_row = cell_idx // gx
+        x = (cell_col + 0.5) * _GF_UNIT
+        y = (cell_row + 0.5) * _GF_UNIT
+        return round(x, 1), round(y, 1)
+
+    # ------------------------------------------------------------------
     def _add_cylinder(self):
         row = self._table.rowCount()
+        x, y = self._next_default_xy()
         self._table.insertRow(row)
         self._table.setItem(row, self._COL_TYPE,   QtWidgets.QTableWidgetItem("cylinder"))
-        self._table.setItem(row, self._COL_X,      QtWidgets.QTableWidgetItem("21.0"))
-        self._table.setItem(row, self._COL_Y,      QtWidgets.QTableWidgetItem("21.0"))
+        self._table.setItem(row, self._COL_X,      QtWidgets.QTableWidgetItem(str(x)))
+        self._table.setItem(row, self._COL_Y,      QtWidgets.QTableWidgetItem(str(y)))
         self._table.setItem(row, self._COL_DEPTH,  QtWidgets.QTableWidgetItem("10.0"))
         self._table.setItem(row, self._COL_RADIUS, QtWidgets.QTableWidgetItem("8.0"))
         self._table.setItem(row, self._COL_WIDTH,  QtWidgets.QTableWidgetItem(""))
@@ -301,10 +332,11 @@ class _ContainerTableWidget(QtWidgets.QWidget):
 
     def _add_rectangle(self):
         row = self._table.rowCount()
+        x, y = self._next_default_xy()
         self._table.insertRow(row)
         self._table.setItem(row, self._COL_TYPE,   QtWidgets.QTableWidgetItem("rectangle"))
-        self._table.setItem(row, self._COL_X,      QtWidgets.QTableWidgetItem("21.0"))
-        self._table.setItem(row, self._COL_Y,      QtWidgets.QTableWidgetItem("21.0"))
+        self._table.setItem(row, self._COL_X,      QtWidgets.QTableWidgetItem(str(x)))
+        self._table.setItem(row, self._COL_Y,      QtWidgets.QTableWidgetItem(str(y)))
         self._table.setItem(row, self._COL_DEPTH,  QtWidgets.QTableWidgetItem("10.0"))
         self._table.setItem(row, self._COL_RADIUS, QtWidgets.QTableWidgetItem(""))
         self._table.setItem(row, self._COL_WIDTH,  QtWidgets.QTableWidgetItem("20.0"))
@@ -395,7 +427,11 @@ class GridfinityDialog(QtWidgets.QDialog):
         self.shell_spin          = _spin(0.5,  50.0,   2.0, dec=2)
 
         # ── Container table ────────────────────────────────────────────
-        self._container_widget = _ContainerTableWidget()
+        # Pass grid spinner references so default positions spread across cells
+        self._container_widget = _ContainerTableWidget(
+            grid_x_ref=self.grid_x_spin,
+            grid_y_ref=self.grid_y_spin,
+        )
 
         # ── Lid ────────────────────────────────────────────────────────
         self.lid_check      = QtWidgets.QCheckBox("Create lid")
@@ -456,10 +492,14 @@ class GridfinityDialog(QtWidgets.QDialog):
             "<b>Interior base height</b>: the solid block inside the box into "
             "which container pockets are carved from the top. "
             "<b>Container pockets</b>: add cylinders or rectangles; their "
-            "shapes are kept as separate FreeCAD objects so they can be "
-            "adjusted after creation. "
-            "<b>Corner pad</b>: extra solid material added around each corner "
-            "magnet hole for structural support.</i>"
+            "shapes are kept as separate FreeCAD objects linked to the box "
+            "via Part::Cut — moving a pocket shape repositions the hole. "
+            "New containers are placed at grid-cell centres automatically. "
+            "<b>Magnet holes</b> are drilled at the top rim of the box walls "
+            "and at the bottom face of the lid so they align when the lid is "
+            "placed on the box. "
+            "<b>Corner pad</b>: extra solid material fused at each top corner "
+            "to provide wall thickness around the magnet holes.</i>"
         )
         info.setWordWrap(True)
 
@@ -492,16 +532,30 @@ class GridfinityDialog(QtWidgets.QDialog):
             )
             return
         if self.magnet_check.isChecked():
-            md = self.magnet_depth_spin.value()
-            if md > shell:
+            md  = self.magnet_depth_spin.value()
+            # Magnet holes are drilled downward from the top of the box walls;
+            # depth must not exceed the total box height.
+            if md >= bh:
                 QtWidgets.QMessageBox.warning(
                     self,
                     "Invalid magnet depth",
-                    f"Magnet depth ({md:.2f} mm) exceeds shell (floor) "
-                    f"thickness ({shell:.2f} mm). Reduce magnet depth or "
-                    "increase shell thickness.",
+                    f"Magnet depth ({md:.2f} mm) must be less than "
+                    f"total box height ({bh:.2f} mm).",
                 )
                 return
+            # If a lid is enabled, its magnet holes are drilled from the
+            # bottom face; depth must not exceed the lid thickness.
+            if self.lid_check.isChecked():
+                lh = self.lid_height_spin.value()
+                if md > lh:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Invalid magnet depth for lid",
+                        f"Magnet depth ({md:.2f} mm) exceeds lid height "
+                        f"({lh:.2f} mm). Reduce magnet depth or increase "
+                        "lid height.",
+                    )
+                    return
         self.accept()
 
     # ------------------------------------------------------------------
