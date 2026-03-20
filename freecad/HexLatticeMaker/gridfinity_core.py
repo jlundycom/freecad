@@ -49,17 +49,30 @@ The lid's magnet holes are drilled **upward** from the **bottom** face
 (z = 0) of the lid, so that when the lid sits on top of the box both sets
 of holes face each other and the magnets attract.
 
-Corner pads and magnet-support ridges
---------------------------------------
-When corner magnets are enabled a **full-height ridge** (spanning z = 0 to
-z = box_height) is fused at each corner.  Its XY footprint is
-``(shell_thickness + corner_pad) × (shell_thickness + corner_pad)``,
-centred on the magnet XY position.  The magnet hole is then drilled
-downward from the top of this ridge; the solid material immediately
-below the hole acts as a shelf that the magnet rests on when glued.
-Even when ``corner_pad = 0`` the ridge footprint equals the existing
-wall-corner material, so no visible geometry change occurs — but the
-fuse ensures the solid is present before the hole is drilled.
+Gridfinity base chamfer
+-----------------------
+The outer bottom edges of the box carry a 45° chamfer of size
+``GRIDFINITY_BASE_CHAMFER`` (2.15 mm, per the Gridfinity open standard).
+This chamfer allows the box to be placed on a standard Gridfinity baseplate
+and provides the characteristic stacking profile.  The chamfer is applied
+to all four outer bottom edges of the box body before any other operations.
+
+Corner magnet ridges — cylindrical, fully enclosed
+---------------------------------------------------
+When corner magnets are enabled a **full-height cylindrical ridge** is fused
+at each corner, spanning z = 0 to z = box_height.  Its radius is
+``magnet_radius + shell_thickness + corner_pad``.
+
+The magnet cylinder centre is positioned at
+``(shell_thickness + corner_pad + magnet_radius, …)`` from each outer edge.
+This ensures a wall of exactly ``shell_thickness + corner_pad`` surrounds
+the circular magnet pocket on **all radial sides**:
+
+* Outer sides  — the existing box outer wall provides the enclosure.
+* Inner sides  — the fused cylindrical ridge extends inward past the hole.
+* Bottom       — the solid shelf below the hole (full height ridge minus the
+  drilled depth) supports the magnet when glued.
+* Top          — open, so the magnet can be inserted and glued.
 
 Lid
 ---
@@ -90,6 +103,7 @@ import math
 
 GRIDFINITY_UNIT        = 42.0   # mm - grid cell width/length
 GRIDFINITY_HEIGHT_UNIT = 7.0    # mm - standard height unit
+GRIDFINITY_BASE_CHAMFER = 2.15  # mm - 45° bottom outer-edge chamfer (Gridfinity spec)
 
 # ---------------------------------------------------------------------------
 # Pure-Python helpers  (no FreeCAD dependency – fully unit-testable)
@@ -116,24 +130,44 @@ def magnet_corner_centres(
     outer_y: float,
     shell_thickness: float,
     corner_pad: float = 0.0,
+    magnet_radius: float = 0.0,
 ) -> list:
     """Return ``(cx, cy)`` centre positions for the four corner magnet holes.
 
-    Each magnet hole is centred inside a corner block whose inset is
-    ``(shell_thickness + corner_pad) / 2`` from the nearest outer edge.
+    When *magnet_radius* > 0 the centre is positioned so that a cylinder of
+    that radius is **fully enclosed** by solid material on all radial sides,
+    with a wall of at least ``shell_thickness + corner_pad`` between the hole
+    and every outer face:
+
+    .. code-block:: text
+
+        offset = shell_thickness + corner_pad + magnet_radius
+
+    When *magnet_radius* == 0 (default) the legacy formula is used:
+
+    .. code-block:: text
+
+        offset = (shell_thickness + corner_pad) / 2
 
     Parameters
     ----------
     outer_x, outer_y : outer box dimensions (mm)
     shell_thickness  : wall / floor thickness (mm)
-    corner_pad       : additional padding added to corner thickness (mm)
+    corner_pad       : additional wall thickness added around each corner (mm)
+    magnet_radius    : radius of the cylindrical magnet pocket (mm).  Pass the
+                       actual magnet radius to guarantee full enclosure.
 
     Returns
     -------
     list of four ``(cx, cy)`` tuples in order:
         [bottom-left, bottom-right, top-left, top-right]
     """
-    offset = (shell_thickness + corner_pad) / 2.0
+    if magnet_radius > 1e-9:
+        # Fully-enclosed design: shell_thickness + corner_pad wall on every side
+        offset = shell_thickness + corner_pad + magnet_radius
+    else:
+        # Legacy / no-magnet: centre of the wall material
+        offset = (shell_thickness + corner_pad) / 2.0
     return [
         (offset,              offset),               # bottom-left
         (outer_x - offset,    offset),               # bottom-right
@@ -173,26 +207,46 @@ def container_z_center(
     return shell_thickness + interior_height - depth / 2.0
 
 
-def magnet_ridge_footprint(
+def gridfinity_base_chamfer_size() -> float:
+    """Return the standard Gridfinity bottom outer-edge chamfer size (mm).
+
+    The outer bottom edges of every Gridfinity-compatible bin carry a 45°
+    chamfer of this size so they locate correctly in a Gridfinity baseplate.
+
+    Returns
+    -------
+    float: ``GRIDFINITY_BASE_CHAMFER`` (2.15 mm)
+    """
+    return GRIDFINITY_BASE_CHAMFER
+
+
+def magnet_ridge_radius(
     shell_thickness: float,
+    magnet_radius: float = 0.0,
     corner_pad: float = 0.0,
 ) -> float:
-    """Return the side length of the square corner ridge footprint (mm).
+    """Return the radius of the cylindrical corner ridge for magnet enclosure.
 
-    Each corner ridge is a square pillar of side
-    ``shell_thickness + corner_pad`` centred on the magnet XY position.
-    This pure helper makes the relationship testable without FreeCAD.
+    The ridge cylinder has radius ``magnet_radius + shell_thickness + corner_pad``,
+    which ensures a wall of exactly ``shell_thickness + corner_pad`` surrounds
+    the circular magnet pocket on every radial side.
+
+    Combined with :func:`magnet_corner_centres` (called with the same
+    *magnet_radius* value), the ridge cylinder extends from the outer face
+    (radius = 0 in world coordinates) through to the inner side, completely
+    enclosing the cylindrical magnet pocket.
 
     Parameters
     ----------
     shell_thickness : wall / floor thickness (mm)
-    corner_pad      : extra inward extension beyond the wall thickness (mm)
+    magnet_radius   : radius of the cylindrical magnet pocket (mm)
+    corner_pad      : extra wall thickness added around each corner (mm)
 
     Returns
     -------
-    float: side length of the square ridge cross-section (mm)
+    float: radius of the cylindrical ridge (mm)
     """
-    return shell_thickness + corner_pad
+    return magnet_radius + shell_thickness + corner_pad
 
 
 def validate_container(spec: dict, outer_x: float, outer_y: float) -> list:
@@ -375,6 +429,9 @@ def make_gridfinity_box(
     Magnet holes are drilled **downward** from the **top** face at the four
     corners so that a lid with bottom-face magnet holes can attach.
 
+    The outer bottom edges carry the standard Gridfinity 45° stacking chamfer
+    so the box is compatible with Gridfinity baseplates.
+
     Parameters
     ----------
     grid_x, grid_y   : number of 42 mm grid units in X and Y
@@ -387,12 +444,13 @@ def make_gridfinity_box(
                        default) and apply cuts in the document instead.
     magnet_radius    : radius of each corner magnet hole (mm); 0 = none
     magnet_depth     : depth of each corner magnet hole (mm); holes drilled
-                       down from the top face (z = box_height)
-    corner_pad       : extra inward extension of the corner ridge (mm).
-                       Each corner gets a full-height ridge of footprint
-                       ``(shell_thickness + corner_pad)²``; the bottom of
-                       the magnet hole acts as a glue shelf for the magnet.
-                       Use 0 for no extra padding (ridge = wall corner only).
+                       down from the top face (z = box_height).  The solid
+                       material below each hole supports the magnet when glued.
+    corner_pad       : extra wall thickness added around each magnet pocket (mm).
+                       A cylindrical ridge of radius
+                       ``magnet_radius + shell_thickness + corner_pad`` is fused
+                       at each corner; the same thickness of material surrounds
+                       the hole on all radial sides.
 
     Returns
     -------
@@ -408,6 +466,53 @@ def make_gridfinity_box(
     # 1.  Start with a solid rectangular block (full outer dimensions)
     # ------------------------------------------------------------------
     body = Part.makeBox(outer_x, outer_y, box_height, App.Vector(0.0, 0.0, 0.0))
+
+    # ------------------------------------------------------------------
+    # 1b. Apply Gridfinity base chamfer to the four outer bottom edges.
+    #     A 45° chamfer of GRIDFINITY_BASE_CHAMFER mm (2.15 mm) is cut from
+    #     each outer bottom edge so the box sits correctly on a Gridfinity
+    #     baseplate and has the characteristic stacking profile.
+    # ------------------------------------------------------------------
+    c = GRIDFINITY_BASE_CHAMFER
+    # Each cutter is a triangular prism whose cross-section is the right
+    # triangle removed from the box corner.  The four edges share the same
+    # chamfer profile but are extruded along different axes.
+
+    # Front edge (y = 0, z = 0): triangle in YZ at x = 0, extruded in +X
+    wire = Part.makePolygon([
+        App.Vector(0.0, 0.0, 0.0),
+        App.Vector(0.0, c,   0.0),
+        App.Vector(0.0, 0.0, c),
+        App.Vector(0.0, 0.0, 0.0),
+    ])
+    body = body.cut(Part.Face(wire).extrude(App.Vector(outer_x, 0.0, 0.0)))
+
+    # Back edge (y = outer_y, z = 0)
+    wire = Part.makePolygon([
+        App.Vector(0.0, outer_y,     0.0),
+        App.Vector(0.0, outer_y - c, 0.0),
+        App.Vector(0.0, outer_y,     c),
+        App.Vector(0.0, outer_y,     0.0),
+    ])
+    body = body.cut(Part.Face(wire).extrude(App.Vector(outer_x, 0.0, 0.0)))
+
+    # Left edge (x = 0, z = 0): triangle in XZ at y = 0, extruded in +Y
+    wire = Part.makePolygon([
+        App.Vector(0.0, 0.0, 0.0),
+        App.Vector(c,   0.0, 0.0),
+        App.Vector(0.0, 0.0, c),
+        App.Vector(0.0, 0.0, 0.0),
+    ])
+    body = body.cut(Part.Face(wire).extrude(App.Vector(0.0, outer_y, 0.0)))
+
+    # Right edge (x = outer_x, z = 0)
+    wire = Part.makePolygon([
+        App.Vector(outer_x,     0.0, 0.0),
+        App.Vector(outer_x - c, 0.0, 0.0),
+        App.Vector(outer_x,     0.0, c),
+        App.Vector(outer_x,     0.0, 0.0),
+    ])
+    body = body.cut(Part.Face(wire).extrude(App.Vector(0.0, outer_y, 0.0)))
 
     # ------------------------------------------------------------------
     # 2.  Cut out the open air cavity above the solid interior base
@@ -429,21 +534,25 @@ def make_gridfinity_box(
         body = body.cut(air_cavity)
 
     # ------------------------------------------------------------------
-    # 3.  Fuse full-height corner ridges whenever magnets are active.
-    #
-    #     Each ridge spans z = 0 → z = box_height with a square footprint
-    #     of (shell_thickness + corner_pad)² centred on the magnet position.
-    #     The magnet hole (step 5) carves the top portion, leaving a solid
-    #     shelf immediately below the hole so the magnet can be glued in
-    #     place and rests on something solid.
+    # 3.  Fuse full-height cylindrical corner ridges whenever magnets are
+    #     active.  Each ridge is a cylinder of radius
+    #     ``magnet_radius + shell_thickness + corner_pad`` spanning z = 0
+    #     to z = box_height, centred at the magnet position.  The magnet
+    #     hole (step 5) carves the top portion, leaving a solid shelf at
+    #     z = box_height − magnet_depth so the magnet rests on something
+    #     when glued.  The cylinder completely surrounds the circular pocket
+    #     with an equal-thickness wall on all radial sides.
     # ------------------------------------------------------------------
     if magnet_radius > 1e-9:
-        centres = magnet_corner_centres(outer_x, outer_y, shell_thickness, corner_pad)
-        pad_size = shell_thickness + corner_pad
+        centres = magnet_corner_centres(
+            outer_x, outer_y, shell_thickness, corner_pad, magnet_radius,
+        )
+        R_ridge = magnet_ridge_radius(shell_thickness, magnet_radius, corner_pad)
         for cx, cy in centres:
-            ridge = Part.makeBox(
-                pad_size, pad_size, box_height,
-                App.Vector(cx - pad_size / 2.0, cy - pad_size / 2.0, 0.0),
+            ridge = Part.makeCylinder(
+                R_ridge, box_height,
+                App.Vector(cx, cy, 0.0),
+                App.Vector(0.0, 0.0, 1.0),
             )
             body = body.fuse(ridge)
 
@@ -456,11 +565,13 @@ def make_gridfinity_box(
     # ------------------------------------------------------------------
     # 5.  Drill magnet holes downward from the TOP face (z = box_height)
     #     so that the lid's bottom-face magnets align with these holes.
-    #     The solid material below each hole (from step 3) acts as a shelf
-    #     on which the magnet rests when glued.
+    #     The cylindrical ridge (step 3) provides a full-thickness wall
+    #     around the hole; the solid shelf below the hole supports the magnet.
     # ------------------------------------------------------------------
     if magnet_radius > 1e-9 and magnet_depth > 1e-9:
-        centres = magnet_corner_centres(outer_x, outer_y, shell_thickness, corner_pad)
+        centres = magnet_corner_centres(
+            outer_x, outer_y, shell_thickness, corner_pad, magnet_radius,
+        )
         for cx, cy in centres:
             hole = make_magnet_hole_shape(
                 cx, cy, magnet_radius, magnet_depth,
@@ -512,8 +623,12 @@ def make_gridfinity_lid(
 
     # Drill magnet holes upward from the *bottom* face (z = 0)
     # so they face the matching holes in the box top face.
+    # Pass magnet_radius to magnet_corner_centres so the holes are
+    # positioned for full enclosure (same formula as the box).
     if magnet_radius > 1e-9 and magnet_depth > 1e-9:
-        centres = magnet_corner_centres(outer_x, outer_y, shell_thickness, corner_pad)
+        centres = magnet_corner_centres(
+            outer_x, outer_y, shell_thickness, corner_pad, magnet_radius,
+        )
         for cx, cy in centres:
             hole = make_magnet_hole_shape(cx, cy, magnet_radius, magnet_depth,
                                           z_base=0.0)

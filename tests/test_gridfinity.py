@@ -21,10 +21,12 @@ if _repo_root not in sys.path:
 from freecad.HexLatticeMaker.gridfinity_core import (
     GRIDFINITY_UNIT,
     GRIDFINITY_HEIGHT_UNIT,
+    GRIDFINITY_BASE_CHAMFER,
     gridfinity_outer_dimensions,
+    gridfinity_base_chamfer_size,
     magnet_corner_centres,
     container_z_center,
-    magnet_ridge_footprint,
+    magnet_ridge_radius,
     validate_container,
 )
 
@@ -41,6 +43,12 @@ class TestConstants:
 
     def test_gridfinity_height_unit(self):
         assert GRIDFINITY_HEIGHT_UNIT == 7.0
+
+    def test_gridfinity_base_chamfer(self):
+        assert GRIDFINITY_BASE_CHAMFER == pytest.approx(2.15)
+
+    def test_base_chamfer_positive(self):
+        assert GRIDFINITY_BASE_CHAMFER > 0.0
 
 
 # ===========================================================================
@@ -84,8 +92,8 @@ class TestGridfinityOuterDimensions:
 # ===========================================================================
 
 class TestMagnetCornerCentres:
-    def _call(self, outer_x=84.0, outer_y=84.0, shell=2.0, pad=0.0):
-        return magnet_corner_centres(outer_x, outer_y, shell, pad)
+    def _call(self, outer_x=84.0, outer_y=84.0, shell=2.0, pad=0.0, magnet_r=0.0):
+        return magnet_corner_centres(outer_x, outer_y, shell, pad, magnet_r)
 
     def test_returns_four_points(self):
         centres = self._call()
@@ -135,6 +143,46 @@ class TestMagnetCornerCentres:
         for cx, cy in centres:
             assert 0.0 < cx < outer_x
             assert 0.0 < cy < outer_y
+
+    # --- enclosed-mode tests (magnet_radius > 0) ---
+
+    def test_enclosed_offset_formula(self):
+        """With magnet_radius > 0, offset = shell + pad + magnet_radius."""
+        shell, pad, mr = 2.0, 1.0, 3.0
+        expected = shell + pad + mr
+        centres = magnet_corner_centres(84.0, 84.0, shell, pad, mr)
+        assert centres[0][0] == pytest.approx(expected)
+        assert centres[0][1] == pytest.approx(expected)
+
+    def test_enclosed_symmetry_x(self):
+        """Enclosed mode must still be symmetric about outer_x/2."""
+        outer_x = 84.0
+        centres = magnet_corner_centres(outer_x, 84.0, 2.0, 0.0, 3.0)
+        assert centres[0][0] + centres[1][0] == pytest.approx(outer_x)
+
+    def test_enclosed_symmetry_y(self):
+        outer_y = 84.0
+        centres = magnet_corner_centres(84.0, outer_y, 2.0, 0.0, 3.0)
+        assert centres[0][1] + centres[2][1] == pytest.approx(outer_y)
+
+    def test_enclosed_hole_stays_inside_box(self):
+        """Cylinder of radius magnet_r centred at cx must not exit the box."""
+        shell, pad, mr = 2.0, 0.0, 3.0
+        outer_x = 84.0
+        centres = magnet_corner_centres(outer_x, outer_x, shell, pad, mr)
+        for cx, cy in centres:
+            assert cx - mr >= 0.0 - 1e-9
+            assert cx + mr <= outer_x + 1e-9
+            assert cy - mr >= 0.0 - 1e-9
+            assert cy + mr <= outer_x + 1e-9
+
+    def test_enclosed_outer_wall_thickness(self):
+        """Distance from cx to outer face must equal shell + pad."""
+        shell, pad, mr = 2.0, 1.0, 3.0
+        centres = magnet_corner_centres(84.0, 84.0, shell, pad, mr)
+        cx, cy = centres[0]
+        assert cx - mr == pytest.approx(shell + pad)
+        assert cy - mr == pytest.approx(shell + pad)
 
 
 # ===========================================================================
@@ -244,43 +292,73 @@ class TestContainerZCenter:
 
 
 # ===========================================================================
-# magnet_ridge_footprint
+# gridfinity_base_chamfer_size
 # ===========================================================================
 
-class TestMagnetRidgeFootprint:
-    def test_no_pad(self):
-        """With no corner pad, footprint equals shell_thickness."""
-        assert magnet_ridge_footprint(2.0, corner_pad=0.0) == pytest.approx(2.0)
-
-    def test_with_pad(self):
-        """Footprint equals shell_thickness + corner_pad."""
-        assert magnet_ridge_footprint(2.0, corner_pad=1.0) == pytest.approx(3.0)
-
-    def test_zero_pad_explicit(self):
-        assert magnet_ridge_footprint(3.0, corner_pad=0.0) == pytest.approx(3.0)
+class TestGridfinityBaseChamferSize:
+    def test_matches_constant(self):
+        assert gridfinity_base_chamfer_size() == pytest.approx(GRIDFINITY_BASE_CHAMFER)
 
     def test_returns_float(self):
-        result = magnet_ridge_footprint(2.0, corner_pad=1.5)
+        assert isinstance(gridfinity_base_chamfer_size(), float)
+
+    def test_value_is_2_15(self):
+        assert gridfinity_base_chamfer_size() == pytest.approx(2.15)
+
+    def test_positive(self):
+        assert gridfinity_base_chamfer_size() > 0.0
+
+
+# ===========================================================================
+# magnet_ridge_radius
+# ===========================================================================
+
+class TestMagnetRidgeRadius:
+    def test_no_magnet_no_pad(self):
+        """With magnet_radius=0 and no corner pad, radius equals shell_thickness."""
+        assert magnet_ridge_radius(2.0) == pytest.approx(2.0)
+
+    def test_with_magnet_no_pad(self):
+        """Radius = magnet_radius + shell_thickness."""
+        assert magnet_ridge_radius(2.0, magnet_radius=3.0) == pytest.approx(5.0)
+
+    def test_with_magnet_and_pad(self):
+        """Radius = magnet_radius + shell_thickness + corner_pad."""
+        assert magnet_ridge_radius(2.0, magnet_radius=3.0, corner_pad=1.0) == pytest.approx(6.0)
+
+    def test_no_magnet_with_pad(self):
+        """Radius = shell_thickness + corner_pad when magnet_radius=0."""
+        assert magnet_ridge_radius(2.0, magnet_radius=0.0, corner_pad=1.0) == pytest.approx(3.0)
+
+    def test_returns_float(self):
+        result = magnet_ridge_radius(2.0, magnet_radius=1.5, corner_pad=0.5)
         assert isinstance(result, float)
 
     def test_larger_shell(self):
-        assert magnet_ridge_footprint(5.0, corner_pad=2.0) == pytest.approx(7.0)
+        assert magnet_ridge_radius(5.0, magnet_radius=0.0, corner_pad=2.0) == pytest.approx(7.0)
 
-    def test_footprint_always_at_least_shell_thickness(self):
-        """Ridge footprint is always ≥ shell_thickness."""
+    def test_radius_always_at_least_shell_thickness(self):
+        """Ridge radius is always ≥ shell_thickness."""
         for shell in [1.0, 2.0, 3.0, 5.0]:
-            for pad in [0.0, 0.5, 1.0, 2.0]:
-                fp = magnet_ridge_footprint(shell, corner_pad=pad)
-                assert fp >= shell
+            for mr in [0.0, 1.0, 3.0]:
+                for pad in [0.0, 0.5, 1.0, 2.0]:
+                    r = magnet_ridge_radius(shell, magnet_radius=mr, corner_pad=pad)
+                    assert r >= shell
 
-    def test_ridge_centre_aligns_with_magnet_corner(self):
-        """The magnet centre and ridge centre coincide for known parameters."""
-        shell, pad = 2.0, 1.0
-        fp = magnet_ridge_footprint(shell, corner_pad=pad)
+    def test_ridge_fully_encloses_hole(self):
+        """ridge_radius - magnet_radius == wall thickness on every side."""
+        shell, pad, mr = 2.0, 1.0, 3.0
+        R = magnet_ridge_radius(shell, magnet_radius=mr, corner_pad=pad)
+        wall = R - mr
+        assert wall == pytest.approx(shell + pad)
+
+    def test_ridge_starts_at_outer_face(self):
+        """cx - R_ridge == 0 (ridge tangent to outer face) for enclosed design."""
+        shell, pad, mr = 2.0, 1.0, 3.0
+        R = magnet_ridge_radius(shell, magnet_radius=mr, corner_pad=pad)
         outer_x = 84.0
-        centres = magnet_corner_centres(outer_x, outer_x, shell, corner_pad=pad)
-        # bottom-left corner magnet is at (offset, offset)
+        centres = magnet_corner_centres(outer_x, outer_x, shell, corner_pad=pad,
+                                        magnet_radius=mr)
         cx, cy = centres[0]
-        # The ridge goes from cx - fp/2 to cx + fp/2; verify it starts at or before 0
-        assert cx - fp / 2.0 <= 0.0 + 1e-9
+        assert cx - R == pytest.approx(0.0, abs=1e-9)
 
