@@ -575,3 +575,166 @@ class GridfinityDialog(QtWidgets.QDialog):
             "magnet_depth":     self.magnet_depth_spin.value()  if use_magnets else 0.0,
             "corner_pad":       self.corner_pad_spin.value()    if use_magnets else 0.0,
         }
+
+
+# ===========================================================================
+# Trapezoid Prism dialog
+# ===========================================================================
+
+class TrapezoidPrismDialog(QtWidgets.QDialog):
+    """Modal dialog for trapezoid prism creation parameters.
+
+    Presents controls for:
+
+    * Front face dimensions (width, height)
+    * Back face dimensions (width, height)
+    * Prism length (front-to-back depth)
+    * Split height (Z plane that divides the prism into two pieces)
+    * Optional screw assembly:
+
+      - Screw shaft radius and threaded-extension length
+      - Nut flat-to-centre radius and nut height
+      - Thread pitch
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Trapezoid Prism")
+        self.setMinimumWidth(400)
+
+        def _spin(lo, hi, default, dec=1, suffix=" mm"):
+            w = QtWidgets.QDoubleSpinBox()
+            w.setRange(lo, hi)
+            w.setValue(default)
+            w.setDecimals(dec)
+            w.setSuffix(suffix)
+            return w
+
+        # ── Prism geometry ──────────────────────────────────────────────
+        self.front_w_spin   = _spin(1.0, 5000.0,  40.0)
+        self.front_h_spin   = _spin(1.0, 5000.0,  30.0)
+        self.back_w_spin    = _spin(1.0, 5000.0,  30.0)
+        self.back_h_spin    = _spin(1.0, 5000.0,  20.0)
+        self.length_spin    = _spin(1.0, 5000.0,  50.0)
+        self.split_h_spin   = _spin(0.1, 4999.0,  10.0)
+
+        # ── Screw assembly ──────────────────────────────────────────────
+        self.screw_check    = QtWidgets.QCheckBox("Add screw and nut")
+        self.screw_check.setChecked(True)
+
+        self.screw_r_spin   = _spin(0.5, 100.0,   3.0, dec=2)
+        self.extend_spin    = _spin(0.1, 5000.0,  10.0)
+        self.nut_r_spin     = _spin(1.0, 200.0,    6.0, dec=2)
+        self.nut_h_spin     = _spin(0.5, 200.0,    5.0)
+        self.pitch_spin     = _spin(0.1,  20.0,    2.0, dec=2)
+
+        # Enable/disable screw widgets when checkbox is toggled
+        for w in (self.screw_r_spin, self.extend_spin, self.nut_r_spin,
+                  self.nut_h_spin, self.pitch_spin):
+            w.setEnabled(self.screw_check.isChecked())
+
+        self.screw_check.toggled.connect(self.screw_r_spin.setEnabled)
+        self.screw_check.toggled.connect(self.extend_spin.setEnabled)
+        self.screw_check.toggled.connect(self.nut_r_spin.setEnabled)
+        self.screw_check.toggled.connect(self.nut_h_spin.setEnabled)
+        self.screw_check.toggled.connect(self.pitch_spin.setEnabled)
+
+        # ── Layout ──────────────────────────────────────────────────────
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignRight)
+
+        form.addRow("Front width:",              self.front_w_spin)
+        form.addRow("Front height:",             self.front_h_spin)
+        form.addRow("Back width:",               self.back_w_spin)
+        form.addRow("Back height:",              self.back_h_spin)
+        form.addRow("Length (front to back):",   self.length_spin)
+        form.addRow("Split height:",             self.split_h_spin)
+
+        form.addRow(self.screw_check)
+
+        screw_grid = QtWidgets.QGridLayout()
+        screw_grid.addWidget(QtWidgets.QLabel("Shaft radius:"),          0, 0)
+        screw_grid.addWidget(self.screw_r_spin,                          0, 1)
+        screw_grid.addWidget(QtWidgets.QLabel("Extension above prism:"), 0, 2)
+        screw_grid.addWidget(self.extend_spin,                           0, 3)
+        screw_grid.addWidget(QtWidgets.QLabel("Nut flat radius:"),       1, 0)
+        screw_grid.addWidget(self.nut_r_spin,                            1, 1)
+        screw_grid.addWidget(QtWidgets.QLabel("Nut height:"),            1, 2)
+        screw_grid.addWidget(self.nut_h_spin,                            1, 3)
+        screw_grid.addWidget(QtWidgets.QLabel("Thread pitch:"),          2, 0)
+        screw_grid.addWidget(self.pitch_spin,                            2, 1)
+        form.addRow("Screw / nut:", screw_grid)
+
+        info = QtWidgets.QLabel(
+            "<i><b>Front / Back</b>: the prism face at Y=0 has the given width "
+            "and height; the face at Y=Length has the back dimensions. "
+            "<b>Split height</b>: the prism is cut horizontally at this Z, "
+            "producing a bottom piece and a top piece. "
+            "<b>Shaft radius</b>: minor (root) radius of the printed screw. "
+            "<b>Extension</b>: how far the threaded section protrudes above the "
+            "top piece — the nut sits here. "
+            "<b>Nut flat radius</b>: flat-to-centre apothem of the hex nut. "
+            "<b>Thread pitch</b>: axial distance between thread crests (mm); "
+            "2 mm is recommended for FDM printing.</i>"
+        )
+        info.setWordWrap(True)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+
+        main = QtWidgets.QVBoxLayout(self)
+        main.addLayout(form)
+        main.addWidget(info)
+        main.addWidget(buttons)
+
+    # ------------------------------------------------------------------
+    def _on_accept(self):
+        """Validate inputs before accepting the dialog."""
+        try:
+            from .trapezoid_prism_core import validate_trapezoid_prism_params
+        except ImportError:
+            from trapezoid_prism_core import validate_trapezoid_prism_params
+
+        errors = validate_trapezoid_prism_params(
+            front_w=self.front_w_spin.value(),
+            front_h=self.front_h_spin.value(),
+            back_w=self.back_w_spin.value(),
+            back_h=self.back_h_spin.value(),
+            length=self.length_spin.value(),
+            split_height=self.split_h_spin.value(),
+            add_screw=self.screw_check.isChecked(),
+            screw_radius=self.screw_r_spin.value(),
+            extend_amount=self.extend_spin.value(),
+            nut_radius=self.nut_r_spin.value(),
+            nut_height=self.nut_h_spin.value(),
+            thread_pitch=self.pitch_spin.value(),
+        )
+        if errors:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid parameters",
+                "\n".join(errors),
+            )
+            return
+        self.accept()
+
+    # ------------------------------------------------------------------
+    def get_params(self) -> dict:
+        """Return the dialog values as a plain dictionary."""
+        return {
+            "front_w":        self.front_w_spin.value(),
+            "front_h":        self.front_h_spin.value(),
+            "back_w":         self.back_w_spin.value(),
+            "back_h":         self.back_h_spin.value(),
+            "length":         self.length_spin.value(),
+            "split_height":   self.split_h_spin.value(),
+            "add_screw":      self.screw_check.isChecked(),
+            "screw_radius":   self.screw_r_spin.value(),
+            "extend_amount":  self.extend_spin.value(),
+            "nut_flat_radius": self.nut_r_spin.value(),
+            "nut_height":     self.nut_h_spin.value(),
+            "thread_pitch":   self.pitch_spin.value(),
+        }
