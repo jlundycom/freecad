@@ -130,9 +130,10 @@ class TestValidateTrapezoidPrismParams:
         errors = validate_trapezoid_prism_params(**self._valid(screw_radius=0.0))
         assert any("screw_radius" in e for e in errors)
 
-    def test_zero_extend_amount_invalid(self):
+    def test_extend_amount_ignored_by_validator(self):
+        """extend_amount is deprecated; any value (including zero) is accepted."""
         errors = validate_trapezoid_prism_params(**self._valid(extend_amount=0.0))
-        assert any("extend_amount" in e for e in errors)
+        assert not any("extend_amount" in e for e in errors)
 
     def test_nut_radius_less_than_screw_radius_invalid(self):
         errors = validate_trapezoid_prism_params(**self._valid(screw_radius=5.0, nut_radius=4.0))
@@ -160,13 +161,13 @@ class TestValidateTrapezoidPrismParams:
         assert len(errors) >= 6
 
     def test_screw_params_not_checked_when_add_screw_false(self):
-        """Screw params with zero values should not produce errors when add_screw=False."""
+        """Screw params with zero/invalid values should not produce errors when add_screw=False."""
         errors = validate_trapezoid_prism_params(
             front_w=40.0, front_h=30.0, back_w=30.0, back_h=20.0,
             length=50.0, split_height=10.0,
             add_screw=False,
             screw_radius=0.0,    # would be invalid if add_screw=True
-            extend_amount=0.0,   # would be invalid if add_screw=True
+            extend_amount=0.0,   # deprecated; not validated
             nut_radius=0.0,
             nut_height=0.0,
             thread_pitch=0.0,
@@ -353,8 +354,10 @@ class TestComputeThreadParams:
 # ===========================================================================
 
 class TestComputeScrewHeights:
-    def _call(self, split_height=10.0, front_h=30.0, back_h=20.0, extend_amount=15.0):
-        return compute_screw_heights(split_height, front_h, back_h, extend_amount)
+    def _call(self, split_height=10.0, front_h=30.0, back_h=20.0,
+              extend_amount=15.0, nut_height=8.0):
+        return compute_screw_heights(split_height, front_h, back_h,
+                                     extend_amount, nut_height=nut_height)
 
     def test_max_prism_height_is_max_of_faces(self):
         d = self._call(front_h=30.0, back_h=20.0)
@@ -368,21 +371,43 @@ class TestComputeScrewHeights:
         d = self._call(split_height=10.0, front_h=30.0, back_h=20.0)
         assert d["top_piece_height"] == pytest.approx(30.0 - 10.0)
 
-    def test_post_total_height(self):
-        d = self._call(front_h=30.0, back_h=20.0, extend_amount=15.0)
-        assert d["post_total_height"] == pytest.approx(30.0 + 15.0)
+    def test_post_total_height_equals_max_h_plus_nut(self):
+        """Post extends above prism by nut_height to give the nut threads to engage."""
+        d = self._call(front_h=30.0, back_h=20.0, nut_height=8.0)
+        assert d["post_total_height"] == pytest.approx(30.0 + 8.0)
 
-    def test_threaded_start_equals_max_h(self):
+    def test_post_total_height_independent_of_extend_amount(self):
+        """extend_amount is deprecated; post height is driven by nut_height."""
+        d1 = self._call(front_h=30.0, nut_height=8.0, extend_amount=5.0)
+        d2 = self._call(front_h=30.0, nut_height=8.0, extend_amount=99.0)
+        assert d1["post_total_height"] == pytest.approx(d2["post_total_height"])
+
+    def test_threaded_start_equals_split_height(self):
+        """Threads begin at the split plane (bottom of the top piece)."""
+        d = self._call(split_height=10.0, front_h=30.0, back_h=20.0)
+        assert d["threaded_start_z"] == pytest.approx(10.0)
+
+    def test_threaded_end_equals_max_h_plus_nut(self):
+        """Threads extend through the full top piece and the stub above."""
+        d = self._call(front_h=30.0, back_h=20.0, nut_height=8.0)
+        assert d["threaded_end_z"] == pytest.approx(30.0 + 8.0)
+
+    def test_nut_bottom_z_equals_max_prism_height(self):
+        """Nut bottom is flush with the prism top surface."""
         d = self._call(front_h=30.0, back_h=20.0)
-        assert d["threaded_start_z"] == pytest.approx(30.0)
+        assert d["nut_bottom_z"] == pytest.approx(30.0)
 
-    def test_threaded_end_equals_max_h_plus_extend(self):
-        d = self._call(front_h=30.0, back_h=20.0, extend_amount=15.0)
-        assert d["threaded_end_z"] == pytest.approx(30.0 + 15.0)
+    def test_nut_bottom_z_independent_of_nut_height(self):
+        """Nut bottom position doesn't change with nut thickness."""
+        d1 = self._call(front_h=30.0, nut_height=5.0)
+        d2 = self._call(front_h=30.0, nut_height=12.0)
+        assert d1["nut_bottom_z"] == pytest.approx(d2["nut_bottom_z"])
 
-    def test_nut_bottom_z_equals_threaded_end(self):
-        d = self._call()
-        assert d["nut_bottom_z"] == pytest.approx(d["threaded_end_z"])
+    def test_threaded_end_minus_start_equals_top_piece_plus_nut(self):
+        """Total threaded length = top-piece height + nut_height."""
+        d = self._call(split_height=10.0, front_h=30.0, back_h=20.0, nut_height=8.0)
+        expected = d["top_piece_height"] + 8.0
+        assert (d["threaded_end_z"] - d["threaded_start_z"]) == pytest.approx(expected)
 
     def test_returns_dict(self):
         assert isinstance(self._call(), dict)

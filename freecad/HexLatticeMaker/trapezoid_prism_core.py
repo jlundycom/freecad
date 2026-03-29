@@ -35,25 +35,25 @@ Screw assembly
 When *add_screw* is True an integral screw post is added:
 
 * The **screw post** is a cylinder centred at the XY midpoint of the prism.
-  It is fused with the bottom piece and rises from Z = 0 to Z = max_h
-  (the top of the prism).  There is no extension above the prism.
+  It is fused with the bottom piece and rises from Z = 0 to
+  Z = max_h + nut_height, providing a threaded stub above the prism that
+  the nut can engage.
 
-* The **threaded region** spans the full height of the top piece — from
-  Z = split_height to Z = max_h.  Threads are approximated by revolved
-  rings (one per pitch interval), each with a triangular cross-section.
-  This approach is robust across all FreeCAD/OCCT versions and produces
-  geometry that prints well on FDM machines.
+* The **threaded region** spans from Z = split_height (bottom of the top
+  piece) to Z = max_h + nut_height (top of the stub above the prism).
+  Threading the full top piece gives the nut plenty of engagement as it is
+  turned; the stub above the prism is the final engagement zone when the
+  nut is fully seated.  Threads are approximated by revolved rings (one per
+  pitch interval), each with a triangular cross-section.  This approach is
+  robust across all FreeCAD/OCCT versions and produces geometry that prints
+  well on FDM machines.
 
 * The **clearance hole** in the top piece is a smooth cylinder of radius
   ``screw_radius + clearance`` drilled along the full height of the top piece.
 
-* A **hex pocket** is cut into the top face of the top piece (depth =
-  ``nut_height``) so the nut sits flush with the prism's top surface.
-
 * The **nut** is a separate hexagonal prism with a central smooth bore.
-  It is placed at Z = max_h − nut_height so that its top face is flush with
-  the top of the prism.  Once threaded onto the post the nut draws the two
-  pieces together and sits completely within the pocket.
+  It is placed at Z = max_h so that its **bottom face is flush with the top
+  surface of the prism**.  The nut protrudes above the prism by nut_height.
 
 All dimensions are in millimetres.
 """
@@ -150,15 +150,6 @@ def validate_trapezoid_prism_params(
             )
         if nut_height <= 0.0:
             errors.append("nut_height must be positive")
-        elif split_height > 0.0 and front_w > 0.0:
-            # Nut must fit inside the top-piece pocket; needs room to spare.
-            max_h_local = max(front_h, back_h)
-            top_piece_h = max_h_local - split_height
-            if nut_height >= top_piece_h:
-                errors.append(
-                    f"nut_height ({nut_height:.3g} mm) must be less than the "
-                    f"top piece height ({top_piece_h:.3g} mm)"
-                )
         if thread_pitch <= 0.0:
             errors.append("thread_pitch must be positive")
 
@@ -303,11 +294,11 @@ def compute_screw_heights(
 ) -> dict:
     """Return a dict describing the Z extents of the screw assembly.
 
-    The screw post starts at Z = 0 (bottom of the bottom piece) and ends at
-    Z = max_h (top of the prism).  Threads cover the **full height of the top
-    piece** (from Z = split_height to Z = max_h), giving the nut plenty of
-    engagement.  The nut is recessed in a pocket cut into the top face of the
-    top piece so that its top surface is flush with the prism top.
+    The screw post starts at Z = 0 (bottom of the bottom piece) and extends
+    to Z = max_h + nut_height, providing a stub above the prism that the nut
+    can thread onto.  Threads cover the **full height of the top piece** plus
+    the stub above the prism, giving the nut plenty of engagement.  The nut's
+    bottom face rests on the prism top surface (Z = max_h).
 
     Parameters
     ----------
@@ -316,7 +307,7 @@ def compute_screw_heights(
     back_h         : height of the back face (mm)
     extend_amount  : *deprecated — no longer used.*  Kept for backward
                      compatibility; callers may continue to pass it.
-    nut_height     : thickness of the nut (mm); determines pocket depth.
+    nut_height     : thickness of the nut (mm).
 
     Returns
     -------
@@ -327,28 +318,25 @@ def compute_screw_heights(
     ``top_piece_height``
         Height of the top piece — ``max_prism_height − split_height`` (mm).
     ``post_total_height``
-        Full length of the screw post — equals ``max_prism_height``.
+        Full length of the screw post — ``max_prism_height + nut_height``.
     ``threaded_start_z``
         Z where the threaded section begins — ``split_height`` (bottom of
         top piece).
     ``threaded_end_z``
-        Z where the threaded section ends — ``max_prism_height`` (top of
-        prism).
+        Z where the threaded section ends — ``max_prism_height + nut_height``
+        (top of stub above prism).
     ``nut_bottom_z``
-        Z of the bottom face of the nut — ``max_prism_height − nut_height``.
-        The nut top face is flush with the prism top (Z = max_prism_height).
-    ``nut_pocket_depth``
-        Depth of the hex pocket cut into the top face — equals ``nut_height``.
+        Z of the bottom face of the nut — ``max_prism_height``.  The nut
+        bottom is flush with the prism top surface.
     """
     max_h = max(float(front_h), float(back_h))
     return {
         "max_prism_height":  max_h,
         "top_piece_height":  max_h - float(split_height),
-        "post_total_height": max_h,
+        "post_total_height": max_h + float(nut_height),
         "threaded_start_z":  float(split_height),
-        "threaded_end_z":    max_h,
-        "nut_bottom_z":      max_h - float(nut_height),
-        "nut_pocket_depth":  float(nut_height),
+        "threaded_end_z":    max_h + float(nut_height),
+        "nut_bottom_z":      max_h,
     }
 
 
@@ -692,8 +680,8 @@ def create_trapezoid_prism_pieces(
         is True a smooth clearance hole is cut through the full height.
 
     ``TP_Nut`` *(only when add_screw is True)*
-        Hexagonal nut with smooth central bore, placed at
-        Z = max_h + extend_amount (just above the threaded post).
+        Hexagonal nut with smooth central bore, placed at Z = max_h so its
+        bottom face is flush with the prism top surface.
 
     Parameters
     ----------
@@ -703,7 +691,7 @@ def create_trapezoid_prism_pieces(
     split_height       : Z of the split plane (mm)
     add_screw          : if True, add screw post and nut
     screw_radius       : screw shaft radius (mm)
-    extend_amount      : length of threaded extension above prism (mm)
+    extend_amount      : kept for backward compatibility; no longer used
     nut_flat_radius    : hex nut apothem (flat-to-centre, mm)
     nut_height         : nut thickness (mm)
     thread_pitch       : thread pitch (mm)
@@ -779,21 +767,12 @@ def create_trapezoid_prism_pieces(
                                  App.Vector(cx, cy, split_height - 0.5))
         top_piece = top_piece.cut(hole)
 
-        # Hex pocket in the top face so the nut sits flush with the surface
+        # Nut — placed so its bottom face is flush with the prism top (Z = max_h)
         thread_depth = thread_pitch * thread_depth_ratio
         nut_geo = compute_nut_geometry(
             screw_radius, nut_flat_radius, nut_height, clearance,
             thread_depth=thread_depth,
         )
-        pocket_depth = heights["nut_pocket_depth"]
-        pocket_z     = heights["nut_bottom_z"]
-        # Pocket slightly larger than the nut circumradius so the nut drops in
-        pocket_circumr = nut_geo["corner_radius"] + clearance
-        pocket_apothem = pocket_circumr * math.cos(math.pi / 6.0)
-        hex_pocket = _make_hex_solid(cx, cy, pocket_z, pocket_apothem, pocket_depth)
-        top_piece = top_piece.cut(hex_pocket)
-
-        # Nut placed so its top face is flush with the prism top
         nut_shape = make_nut_solid(
             cx, cy,
             z0=heights["nut_bottom_z"],
