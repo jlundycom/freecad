@@ -39,8 +39,10 @@ When *add_screw* is True an integral screw post is added:
   height of the top piece, extending *extend_amount* mm above the prism.
 
 * The threaded region occupies the extension above the top piece only.
-  Threads are an approximation suitable for 3D printing: a helical ridge
-  swept from a right-triangular profile.
+  Threads are approximated by revolved rings (one per pitch interval), each
+  with a triangular cross-section.  This approach is robust across all
+  FreeCAD/OCCT versions and produces geometry that prints well on FDM
+  machines.
 
 * The **clearance hole** in the top piece is a smooth cylinder of radius
   ``screw_radius + clearance`` drilled along the full height of the top piece.
@@ -58,8 +60,9 @@ import math
 # ---------------------------------------------------------------------------
 
 # Default 3D-print-friendly thread pitch (mm).
-# A 2 mm pitch is coarser than standard ISO M3–M6 but prints reliably.
-DEFAULT_THREAD_PITCH: float = 2.0
+# 3 mm pitch gives robust ridges for FDM printing; coarser than ISO M-series
+# but much easier to print reliably on desktop printers.
+DEFAULT_THREAD_PITCH: float = 3.0
 
 # Thread radial depth as a fraction of pitch.
 # ISO full-form depth ≈ 0.6495 × pitch; we use 0.5 for printability.
@@ -82,10 +85,10 @@ def validate_trapezoid_prism_params(
     length: float,
     split_height: float,
     add_screw: bool = True,
-    screw_radius: float = 3.0,
-    extend_amount: float = 10.0,
-    nut_radius: float = 6.0,
-    nut_height: float = 5.0,
+    screw_radius: float = 6.0,
+    extend_amount: float = 20.0,
+    nut_radius: float = 10.0,
+    nut_height: float = 8.0,
     thread_pitch: float = DEFAULT_THREAD_PITCH,
 ) -> list:
     """Validate all parameters and return a (possibly empty) list of error strings.
@@ -350,6 +353,7 @@ def compute_nut_geometry(
     nut_flat_radius: float,
     nut_height: float,
     clearance: float = DEFAULT_SCREW_CLEARANCE,
+    thread_depth: float = 0.0,
 ) -> dict:
     """Return a dict describing the nut geometry.
 
@@ -358,15 +362,19 @@ def compute_nut_geometry(
     screw_radius    : screw shaft radius (mm)
     nut_flat_radius : flat-to-centre (apothem) of the hexagonal nut (mm)
     nut_height      : thickness of the nut (mm)
-    clearance       : radial clearance between bore and screw major radius (mm)
+    clearance       : radial clearance so the nut slides onto the screw post (mm)
+    thread_depth    : radial height of the thread ridges (mm).  The bore is
+                      sized as ``screw_radius + thread_depth + clearance`` so
+                      it clears the thread crests and can be assembled without
+                      force.  Pass 0 (default) when the post has no threads.
 
     Returns
     -------
     dict with keys:
 
     ``bore_radius``
-        Radius of the smooth central bore — includes thread major radius plus
-        *clearance* so the nut can slide onto the screw post.
+        Radius of the smooth central bore — ``screw_radius + thread_depth +
+        clearance`` — so the nut slides freely over the thread crests.
     ``flat_radius``
         ``nut_flat_radius`` (apothem / inradius of the hex, mm).
     ``corner_radius``
@@ -375,7 +383,7 @@ def compute_nut_geometry(
         ``nut_height`` (mm).
     """
     return {
-        "bore_radius":   screw_radius + clearance,
+        "bore_radius":   screw_radius + thread_depth + clearance,
         "flat_radius":   float(nut_flat_radius),
         "corner_radius": nut_flat_radius / math.cos(math.pi / 6.0),
         "height":        float(nut_height),
@@ -473,60 +481,6 @@ def _make_slice_box(x_half: float, y_half: float, z_lo: float, z_hi: float) -> o
     return box
 
 
-def _make_thread_solid(
-    cx: float,
-    cy: float,
-    z_start: float,
-    thread_height: float,
-    minor_r: float,
-    major_r: float,
-    pitch: float,
-) -> object:
-    """Return a FreeCAD shape representing the helical thread ridge.
-
-    The thread is a helical sweep of a right-triangular profile whose base
-    lies along the shaft surface.  The profile fits within the annulus
-    [minor_r, major_r].
-
-    Parameters
-    ----------
-    cx, cy         : XY centre of the screw (mm)
-    z_start        : Z of the bottom of the threaded section (mm)
-    thread_height  : axial extent of the threaded section (mm)
-    minor_r        : shaft (root) radius (mm)
-    major_r        : crest radius (mm)
-    pitch          : axial pitch (mm)
-    """
-    import Part
-    import FreeCAD as App
-
-    depth = major_r - minor_r
-
-    # Build the helix path
-    helix = Part.makeHelix(pitch, thread_height, minor_r)
-    helix.translate(App.Vector(cx, cy, z_start))
-
-    # Thread cross-section: right triangle in the local XZ plane.
-    # Vertices (local, relative to a point on the minor-radius surface):
-    #   A = (0, 0)        — inner root
-    #   B = (depth, 0)    — outer crest
-    #   C = (0, pitch/2)  — inner root, half-pitch up
-    # This gives a sawtooth profile that engages the nut's bore.
-    v_a = App.Vector(minor_r, 0.0, 0.0)
-    v_b = App.Vector(major_r, 0.0, 0.0)
-    v_c = App.Vector(minor_r, 0.0, pitch / 2.0)
-
-    wire_profile = Part.makePolygon([v_a, v_b, v_c, v_a])
-    face_profile = Part.Face(wire_profile)
-
-    # Sweep the triangular face along the helix
-    thread_solid = Part.Wire(helix.Edges).makePipeShell([face_profile], True, False)
-
-    # Translate to the correct XY position
-    thread_solid.translate(App.Vector(cx, cy, 0.0))
-    return thread_solid
-
-
 def _make_screw_post(
     cx: float,
     cy: float,
@@ -538,6 +492,13 @@ def _make_screw_post(
     thread_depth_ratio: float = DEFAULT_THREAD_DEPTH_RATIO,
 ) -> object:
     """Return a FreeCAD solid representing the full screw post (shaft + threads).
+
+    Thread ridges are created as **revolved rings** — one per pitch interval —
+    rather than a helical sweep.  Each ring has a triangular cross-section
+    (inner edge at the shaft surface, crest at the midpoint, inner edge again
+    at the next pitch boundary) revolved 360° around the shaft axis.  This
+    approach is robust across all FreeCAD / OCCT versions and produces clean,
+    manifold solids that print well on FDM machines.
 
     Parameters
     ----------
@@ -556,38 +517,55 @@ def _make_screw_post(
     import Part
     import FreeCAD as App
 
-    depth = thread_pitch * thread_depth_ratio
+    depth   = thread_pitch * thread_depth_ratio
     major_r = shaft_r + depth
 
-    # ── Shaft cylinder (full height) ────────────────────────────────────
+    # ── Shaft cylinder (full height from Z = 0) ─────────────────────────
     shaft = Part.makeCylinder(shaft_r, post_height, App.Vector(cx, cy, 0.0))
 
     thread_height = thread_end_z - thread_start_z
     if thread_height < thread_pitch:
-        # Not enough height for even one full turn — no threads
+        # Not enough height for even one full turn — return plain shaft
         return shaft
 
-    # ── Helix sweep ─────────────────────────────────────────────────────
-    # FreeCAD helix is generated around the Z axis at origin; we translate.
-    helix = Part.makeHelix(thread_pitch, thread_height, shaft_r)
-    helix.translate(App.Vector(cx, cy, thread_start_z))
+    # ── Revolved ring thread ridges ──────────────────────────────────────
+    # Each ring covers exactly one pitch and has a symmetric triangular
+    # profile: inner at shaft_r (bottom), crest at major_r (midpoint),
+    # inner at shaft_r (top).  Revolving 360° around the shaft axis
+    # produces a raised ring with a pointed crest — ideal for FDM printing.
+    #
+    # Only complete rings are created (int() truncation).  Any remaining
+    # fraction of a pitch at the top of the extension is left as plain
+    # shaft — a partial ring would produce a sharp half-tooth that is
+    # fragile and difficult to print reliably on FDM machines.
+    axis_pt  = App.Vector(cx, cy, 0.0)
+    axis_dir = App.Vector(0.0, 0.0, 1.0)
 
-    # Triangular thread profile in the local meridian plane:
-    # lying flat with the inner edge at the shaft surface.
-    v0 = App.Vector(cx + shaft_r,         cy, thread_start_z)
-    v1 = App.Vector(cx + major_r,         cy, thread_start_z)
-    v2 = App.Vector(cx + shaft_r,         cy, thread_start_z + thread_pitch / 2.0)
-    profile_wire = Part.makePolygon([v0, v1, v2, v0])
-    profile_face = Part.Face(profile_wire)
+    n_rings = int(thread_height / thread_pitch)
+    ridges  = []
+    for i in range(n_rings):
+        z0  = thread_start_z + i * thread_pitch
+        z_m = z0 + thread_pitch / 2.0
+        z1  = z0 + thread_pitch
 
-    # Sweep the profile along the helix
-    thread_sweep = Part.Wire(helix.Edges).makePipeShell(
-        [profile_face], True, False
-    )
+        v_bot   = App.Vector(cx + shaft_r, cy, z0)
+        v_crest = App.Vector(cx + major_r, cy, z_m)
+        v_top   = App.Vector(cx + shaft_r, cy, z1)
 
-    # Fuse shaft and thread ridge
-    post = shaft.fuse(thread_sweep)
-    return post
+        wire  = Part.makePolygon([v_bot, v_crest, v_top, v_bot])
+        face  = Part.Face(wire)
+        ridge = face.revolve(axis_pt, axis_dir, 360.0)
+        ridges.append(ridge)
+
+    # At least one ring is guaranteed here because thread_height >= thread_pitch
+    # was checked above and n_rings >= 1.
+
+    # Fuse all ridges, then fuse the result with the shaft
+    thread_body = ridges[0]
+    for r in ridges[1:]:
+        thread_body = thread_body.fuse(r)
+
+    return shaft.fuse(thread_body)
 
 
 def _make_hex_solid(cx: float, cy: float, z0: float, apothem: float, height: float) -> object:
@@ -664,10 +642,10 @@ def create_trapezoid_prism_pieces(
     length: float,
     split_height: float,
     add_screw: bool = True,
-    screw_radius: float = 3.0,
-    extend_amount: float = 10.0,
-    nut_flat_radius: float = 6.0,
-    nut_height: float = 5.0,
+    screw_radius: float = 6.0,
+    extend_amount: float = 20.0,
+    nut_flat_radius: float = 10.0,
+    nut_height: float = 8.0,
     thread_pitch: float = DEFAULT_THREAD_PITCH,
     thread_depth_ratio: float = DEFAULT_THREAD_DEPTH_RATIO,
     clearance: float = DEFAULT_SCREW_CLEARANCE,
@@ -775,8 +753,12 @@ def create_trapezoid_prism_pieces(
                                  App.Vector(cx, cy, split_height - 0.5))
         top_piece = top_piece.cut(hole)
 
-        # Nut
-        nut_geo = compute_nut_geometry(screw_radius, nut_flat_radius, nut_height, clearance)
+        # Nut — bore sized to clear thread crests (major_r) with clearance
+        thread_depth = thread_pitch * thread_depth_ratio
+        nut_geo = compute_nut_geometry(
+            screw_radius, nut_flat_radius, nut_height, clearance,
+            thread_depth=thread_depth,
+        )
         nut_shape = make_nut_solid(
             cx, cy,
             z0=heights["nut_bottom_z"],

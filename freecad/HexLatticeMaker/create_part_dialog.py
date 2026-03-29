@@ -622,11 +622,11 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
         self.screw_check    = QtWidgets.QCheckBox("Add screw and nut")
         self.screw_check.setChecked(True)
 
-        self.screw_r_spin   = _spin(0.5, 100.0,   3.0, dec=2)
-        self.extend_spin    = _spin(0.1, 5000.0,  10.0)
-        self.nut_r_spin     = _spin(1.0, 200.0,    6.0, dec=2)
-        self.nut_h_spin     = _spin(0.5, 200.0,    5.0)
-        self.pitch_spin     = _spin(0.1,  20.0,    2.0, dec=2)
+        self.screw_r_spin   = _spin(0.5, 100.0,   6.0, dec=2)
+        self.extend_spin    = _spin(0.1, 5000.0,  20.0)
+        self.nut_r_spin     = _spin(1.0, 200.0,   10.0, dec=2)
+        self.nut_h_spin     = _spin(0.5, 200.0,    8.0)
+        self.pitch_spin     = _spin(0.1,  20.0,    3.0, dec=2)
 
         # Enable/disable screw widgets when checkbox is toggled
         for w in (self.screw_r_spin, self.extend_spin, self.nut_r_spin,

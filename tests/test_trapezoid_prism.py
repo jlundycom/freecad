@@ -45,7 +45,7 @@ class TestConstants:
         assert DEFAULT_THREAD_PITCH > 0.0
 
     def test_default_thread_pitch_value(self):
-        assert DEFAULT_THREAD_PITCH == pytest.approx(2.0)
+        assert DEFAULT_THREAD_PITCH == pytest.approx(3.0)
 
     def test_default_thread_depth_ratio_range(self):
         assert 0.0 < DEFAULT_THREAD_DEPTH_RATIO < 1.0
@@ -424,12 +424,37 @@ class TestComputeScrewCenter:
 # ===========================================================================
 
 class TestComputeNutGeometry:
-    def _call(self, screw_r=3.0, flat_r=6.0, height=5.0, clearance=DEFAULT_SCREW_CLEARANCE):
-        return compute_nut_geometry(screw_r, flat_r, height, clearance)
+    def _call(self, screw_r=3.0, flat_r=6.0, height=5.0, clearance=DEFAULT_SCREW_CLEARANCE,
+              thread_depth=0.0):
+        return compute_nut_geometry(screw_r, flat_r, height, clearance,
+                                    thread_depth=thread_depth)
+
+    def test_bore_radius_equals_screw_plus_clearance_no_threads(self):
+        """With thread_depth=0 bore = screw_radius + clearance (backward-compatible)."""
+        geo = self._call(screw_r=3.0, clearance=0.3, thread_depth=0.0)
+        assert geo["bore_radius"] == pytest.approx(3.0 + 0.3)
 
     def test_bore_radius_equals_screw_plus_clearance(self):
-        geo = self._call(screw_r=3.0, clearance=0.3)
+        """Legacy call (no thread_depth kwarg) still works."""
+        geo = compute_nut_geometry(3.0, 6.0, 5.0, 0.3)
         assert geo["bore_radius"] == pytest.approx(3.0 + 0.3)
+
+    def test_bore_with_default_thread_depth_matches_no_kwarg(self):
+        """Omitting thread_depth entirely gives the same result as thread_depth=0."""
+        geo_implicit = compute_nut_geometry(3.0, 6.0, 5.0, 0.3)
+        geo_explicit = compute_nut_geometry(3.0, 6.0, 5.0, 0.3, thread_depth=0.0)
+        assert geo_implicit["bore_radius"] == pytest.approx(geo_explicit["bore_radius"])
+
+    def test_bore_includes_thread_depth(self):
+        """bore_radius = screw_radius + thread_depth + clearance."""
+        geo = self._call(screw_r=6.0, clearance=0.3, thread_depth=1.5)
+        assert geo["bore_radius"] == pytest.approx(6.0 + 1.5 + 0.3)
+
+    def test_bore_exceeds_shaft_when_threads_present(self):
+        """Bore must be larger than just screw_radius when thread_depth > 0."""
+        geo_no_thread  = self._call(screw_r=6.0, clearance=0.3, thread_depth=0.0)
+        geo_with_thread = self._call(screw_r=6.0, clearance=0.3, thread_depth=1.5)
+        assert geo_with_thread["bore_radius"] > geo_no_thread["bore_radius"]
 
     def test_flat_radius_stored(self):
         geo = self._call(flat_r=7.0)
@@ -450,8 +475,8 @@ class TestComputeNutGeometry:
         assert geo["height"] == pytest.approx(8.0)
 
     def test_bore_radius_less_than_flat_radius(self):
-        """The bore must fit inside the nut."""
-        geo = self._call(screw_r=3.0, flat_r=6.0, clearance=0.3)
+        """The bore (including thread depth) must still fit inside the nut."""
+        geo = self._call(screw_r=3.0, flat_r=10.0, clearance=0.3, thread_depth=1.5)
         assert geo["bore_radius"] < geo["flat_radius"]
 
     def test_returns_dict_with_required_keys(self):
