@@ -41,25 +41,26 @@ When *add_screw* is True an integral screw post is added:
   orientation in which the nut can sit flush on the top face.
 
 * The **screw post** is a cylinder fused with the bottom piece.  Its base is
-  at Z = 0 (the screw axis meets the bottom face at this height), and it
-  extends along the tilted screw axis through the split plane, through the
-  full top piece, and a further ``nut_height`` mm above the top face —
-  providing a threaded stub onto which the nut is tightened.
+  at Z = 0 and its tip is exactly flush with the prism's top face — nothing
+  protrudes above the surface.  Threads cover from the split plane all the
+  way up to the tip, giving the nut full engagement across its height.
+  Threads are approximated by revolved rings (one per pitch interval), each
+  with a triangular cross-section.  This approach is robust across all
+  FreeCAD / OCCT versions and produces geometry that prints well on FDM
+  machines.
 
-* The **threaded region** starts where the screw axis crosses the split plane
-  and ends at the top of the stub above the prism.  Threading the full top
-  piece gives the nut plenty of engagement as it is turned down.  Threads
-  are approximated by revolved rings (one per pitch interval), each with a
-  triangular cross-section.  This approach is robust across all FreeCAD /
-  OCCT versions and produces geometry that prints well on FDM machines.
+* The **top piece** has two cuts along the screw axis:
 
-* The **clearance hole** in the top piece is a smooth cylinder bored along
-  the screw axis through the full height of the top piece.
+  1. A smooth **clearance hole** (radius = shaft radius + clearance) from the
+     split plane up to the floor of the nut pocket.
+  2. A hexagonal **nut pocket** recessed ``nut_height`` mm downward from the
+     top face.  The nut sits in this pocket; when fully tightened its top face
+     is flush with the prism's top surface.
 
-* The **nut** is a separate hexagonal prism with a central smooth bore.
-  Its bottom face is coplanar with the prism's top surface at the screw
-  centre — i.e., the bottom of the nut is flush with the surface below it.
-  The nut protrudes above the prism by ``nut_height`` mm.
+* The **nut** is a separate piece that fits in the pocket.  Its bore has
+  **matching internal thread grooves** so it can be threaded onto the screw
+  post.  Tightening the nut draws the top piece down onto the bottom piece.
+  The assembled result has a completely flush top surface.
 
 All dimensions are in millimetres.
 """
@@ -615,6 +616,72 @@ def _make_screw_post(
     return shaft.fuse(thread_body)
 
 
+def _make_nut_thread_grooves(
+    nut_bottom_pt,
+    axis_dir,
+    bore_r: float,
+    major_r: float,
+    nut_height: float,
+    thread_pitch: float,
+) -> object:
+    """Return a solid representing the internal thread grooves for a nut bore.
+
+    The grooves have the same triangular radial profile as the screw thread
+    ridges, placed at *thread_pitch* intervals along the nut axis starting from
+    *nut_bottom_pt*.  Subtracting the returned solid from the nut body
+    (which starts with a smooth bore of radius *bore_r*) produces a threaded
+    bore that mates with the screw post.
+
+    At the narrow points (between grooves) the bore stays at *bore_r*
+    (= shaft radius + clearance).  At each groove centre the bore widens to
+    *major_r* (= shaft radius + thread depth + clearance), clearing the screw
+    thread crests with the specified clearance.
+
+    The axis direction must have ``nx == 0``.
+
+    Parameters
+    ----------
+    nut_bottom_pt : ``App.Vector`` — centre of the nut's bottom face
+    axis_dir      : ``App.Vector`` — unit screw axis direction (upward)
+    bore_r        : tight bore radius between grooves (mm)
+    major_r       : widest groove radius (mm) — must be > bore_r
+    nut_height    : nut length along the axis (mm)
+    thread_pitch  : thread pitch (mm)
+
+    Returns
+    -------
+    Part.Solid, or ``None`` if *nut_height* < *thread_pitch*
+    """
+    import Part
+    import FreeCAD as App
+
+    n_rings = int(nut_height / thread_pitch)
+    if n_rings < 1:
+        return None
+
+    radial_dir = App.Vector(1.0, 0.0, 0.0)
+    grooves = []
+    for i in range(n_rings):
+        t0  = i * thread_pitch
+        t_m = t0 + thread_pitch / 2.0
+        t1  = t0 + thread_pitch
+
+        # Triangular profile: bore wall (bore_r) → groove bottom (major_r) → bore wall
+        v_inner_bot = nut_bottom_pt + axis_dir * t0  + radial_dir * bore_r
+        v_outer_mid = nut_bottom_pt + axis_dir * t_m + radial_dir * major_r
+        v_inner_top = nut_bottom_pt + axis_dir * t1  + radial_dir * bore_r
+
+        wire   = Part.makePolygon([v_inner_bot, v_outer_mid, v_inner_top, v_inner_bot])
+        face   = Part.Face(wire)
+        groove = face.revolve(nut_bottom_pt, axis_dir, 360.0)
+        grooves.append(groove)
+
+    groove_body = grooves[0]
+    for g in grooves[1:]:
+        groove_body = groove_body.fuse(g)
+    return groove_body
+
+
 def _make_hex_solid(
     center_pt,
     axis_dir,
@@ -673,31 +740,60 @@ def make_nut_solid(
     nut_flat_radius: float,
     nut_height: float,
     bore_radius: float,
+    thread_pitch: float = 0.0,
+    thread_depth_ratio: float = DEFAULT_THREAD_DEPTH_RATIO,
 ) -> object:
-    """Return a FreeCAD solid for the hexagonal nut with a central bore.
+    """Return a FreeCAD solid for the hexagonal nut with an optionally threaded bore.
 
-    The nut is oriented along *axis_dir* (the screw axis) so that its flat
-    faces are perpendicular to the screw.  The bottom face of the nut sits at
-    *entry_pt* — the point on the prism's top surface where the screw exits.
+    The nut is oriented along *axis_dir* so that its flat faces are
+    perpendicular to the screw.  *entry_pt* is the centre of the nut's
+    **bottom** face.
+
+    When *thread_pitch* > 0 the bore receives matching internal thread grooves
+    (same triangular ring profile as the external screw ridges) so the nut can
+    be threaded onto the screw post.  The grooves widen the bore from the tight
+    shaft-clearance diameter to the thread-crest-clearance diameter at each
+    pitch interval.
 
     Parameters
     ----------
-    entry_pt        : ``App.Vector`` — centre of the nut's bottom face
-    axis_dir        : ``App.Vector`` — unit screw axis direction
-    nut_flat_radius : apothem (flat-to-centre) of the nut hex (mm)
-    nut_height      : nut thickness (mm)
-    bore_radius     : radius of the smooth central bore (mm)
+    entry_pt          : ``App.Vector`` — centre of the nut's bottom face
+    axis_dir          : ``App.Vector`` — unit screw axis direction
+    nut_flat_radius   : apothem (flat-to-centre) of the nut hex (mm)
+    nut_height        : nut thickness (mm)
+    bore_radius       : tight (narrow) bore radius between thread crests
+                        = ``screw_radius + clearance`` (mm)
+    thread_pitch      : thread pitch (mm); 0 = smooth bore (no threads)
+    thread_depth_ratio : depth = pitch × ratio (only used when thread_pitch > 0)
 
     Returns
     -------
-    Part.Shape (solid)
+    Part.Solid
     """
     _require_freecad()
     import Part
 
     hex_solid = _make_hex_solid(entry_pt, axis_dir, nut_flat_radius, nut_height)
+
+    # Smooth bore at the tight (shaft-clearance) radius
     bore = Part.makeCylinder(bore_radius, nut_height, entry_pt, axis_dir)
-    return hex_solid.cut(bore)
+    nut_shape = hex_solid.cut(bore)
+
+    if thread_pitch > 0.0:
+        depth   = thread_pitch * thread_depth_ratio
+        major_r = bore_radius + depth   # groove outer radius (thread crest clearance)
+        grooves = _make_nut_thread_grooves(
+            nut_bottom_pt = entry_pt,
+            axis_dir      = axis_dir,
+            bore_r        = bore_radius,
+            major_r       = major_r,
+            nut_height    = nut_height,
+            thread_pitch  = thread_pitch,
+        )
+        if grooves is not None:
+            nut_shape = nut_shape.cut(grooves)
+
+    return nut_shape
 
 
 # ---------------------------------------------------------------------------
@@ -737,13 +833,17 @@ def create_trapezoid_prism_pieces(
 
     ``TP_Top``
         Upper half of the prism (Z = split_height … prism top).  When
-        *add_screw* is True a smooth clearance hole is bored along the tilted
-        screw axis through the full height of the top piece.
+        *add_screw* is True the top piece has two cuts along the screw axis:
+        a smooth clearance hole from the split plane to the hex-pocket floor,
+        and a hexagonal nut pocket recessed ``nut_height`` mm downward from
+        the top surface.
 
     ``TP_Nut`` *(only when add_screw is True)*
-        Hexagonal nut with smooth central bore, oriented along the screw axis
-        and placed so that its bottom face is flush with the prism's top
-        surface at the screw centre.
+        Hexagonal nut with a threaded bore, oriented along the screw axis.
+        Its bottom face sits at the hex-pocket floor; its top face is flush
+        with the prism's top surface.  Tightening the nut draws the top piece
+        down onto the bottom piece, clamping them with a completely flush top
+        surface.
 
     Parameters
     ----------
@@ -753,7 +853,7 @@ def create_trapezoid_prism_pieces(
     split_height       : Z of the split plane (mm)
     add_screw          : if True, add screw post and nut
     screw_radius       : screw shaft radius (mm)
-    extend_amount      : kept for backward compatibility; no longer used
+    extend_amount      : deprecated — no longer used; kept for backward compat
     nut_flat_radius    : hex nut apothem (flat-to-centre, mm)
     nut_height         : nut thickness (mm)
     thread_pitch       : thread pitch (mm)
@@ -802,39 +902,33 @@ def create_trapezoid_prism_pieces(
     top_piece = full_prism.cut(lower_box)
 
     if add_screw:
-        import FreeCAD as App  # noqa: F811 (already imported above, but clearer here)
+        import FreeCAD as App  # noqa: F811
 
         # ── Compute screw axis (perpendicular to the top face) ────────────
-        # The top face is the plane z = front_h + (back_h-front_h)*y/length.
-        # Its outward unit normal IS the screw axis direction.
         nx, ny_n, nz_n = compute_screw_axis(front_h, back_h, length)
         axis_dir = App.Vector(nx, ny_n, nz_n)
 
         # ── Entry point: where the screw axis meets the top surface ───────
         cx, cy   = compute_screw_center(length)
         h_center = interpolate_height_at_y(cy, front_h, back_h, length)
-        entry_pt = App.Vector(cx, cy, h_center)
+        entry_pt = App.Vector(cx, cy, h_center)   # top surface at screw centre
 
         # ── Base point of the post at Z = 0 ───────────────────────────────
-        # The axis goes through entry_pt in direction axis_dir.  Walking
-        # downward (−axis_dir) from entry_pt until z = 0 gives base_pt.
-        # Δt = h_center / nz_n  (nz_n > 0 always for valid prisms)
-        t_surface = h_center / nz_n          # axis-length from base to top surface
-        base_pt   = App.Vector(cx,
-                               cy - t_surface * ny_n,
-                               0.0)
+        # Walk downward along −axis_dir from entry_pt until Z = 0.
+        # Δt = h_center / nz_n  (nz_n > 0 always)
+        t_surface = h_center / nz_n        # axis-length: base → top surface
+        base_pt   = App.Vector(cx, cy - t_surface * ny_n, 0.0)
 
-        # ── Axis-length positions of key Z planes ─────────────────────────
-        # Split plane (Z = split_height): how far along axis from base_pt
-        t_split = split_height / nz_n
+        # ── Axis-length positions of key planes ───────────────────────────
+        t_split        = split_height / nz_n    # split plane
+        t_pocket_floor = t_surface - nut_height  # bottom of hex nut pocket
 
-        # Post extends from base_pt through the top surface and nut_height
-        # further — giving the nut full thread engagement.
-        post_length    = t_surface + nut_height
+        # Post is exactly flush with the top surface — no stub above.
+        post_length    = t_surface
         thread_start_t = t_split
-        thread_end_t   = post_length
+        thread_end_t   = t_surface   # threads fill the full top-piece height
 
-        # ── Screw post (tilted shaft + threads) ───────────────────────────
+        # ── Screw post (tilted shaft + threads, tip flush with surface) ───
         screw_post = _make_screw_post(
             base_pt,
             axis_dir,
@@ -847,27 +941,34 @@ def create_trapezoid_prism_pieces(
         )
         bottom_piece = bottom_piece.fuse(screw_post)
 
-        # ── Clearance hole through the top piece (tilted) ─────────────────
-        hole_r       = compute_clearance_radius(screw_radius, clearance)
-        # The hole must span the top piece: from just below the split plane
-        # to just above the top surface.  Add 1 mm margin on each end.
+        # ── Clearance hole through the top piece up to the nut pocket ─────
+        hole_r = compute_clearance_radius(screw_radius, clearance)
+        # From just below the split plane to just above the pocket floor.
         hole_start_pt = base_pt + axis_dir * (t_split - 1.0)
-        hole_length   = (t_surface - t_split) + 2.0
+        hole_length   = max(2.0, (t_pocket_floor - t_split) + 2.0)
         hole = Part.makeCylinder(hole_r, hole_length, hole_start_pt, axis_dir)
         top_piece = top_piece.cut(hole)
 
-        # ── Nut (tilted, bottom flush with top surface) ───────────────────
-        thread_depth = thread_pitch * thread_depth_ratio
-        nut_geo = compute_nut_geometry(
-            screw_radius, nut_flat_radius, nut_height, clearance,
-            thread_depth=thread_depth,
+        # ── Hex nut pocket in the top piece (recessed from the top surface) ─
+        # The pocket runs from entry_pt downward nut_height along the axis.
+        # Add a tiny margin above entry_pt for a clean Boolean cut.
+        nut_bottom_pt = entry_pt - axis_dir * nut_height
+        hex_pocket = _make_hex_solid(
+            nut_bottom_pt, axis_dir, nut_flat_radius, nut_height + 0.5
         )
+        top_piece = top_piece.cut(hex_pocket)
+
+        # ── Nut (threaded bore, top face flush with prism top surface) ────
+        # bore_radius = shaft clearance (tight between thread ridges)
+        bore_r = screw_radius + clearance
         nut_shape = make_nut_solid(
-            entry_pt,
+            nut_bottom_pt,
             axis_dir,
-            nut_flat_radius = nut_geo["flat_radius"],
-            nut_height      = nut_geo["height"],
-            bore_radius     = nut_geo["bore_radius"],
+            nut_flat_radius   = nut_flat_radius,
+            nut_height        = nut_height,
+            bore_radius       = bore_r,
+            thread_pitch      = thread_pitch,
+            thread_depth_ratio = thread_depth_ratio,
         )
 
         pieces = [

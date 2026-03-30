@@ -623,18 +623,21 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
         self.screw_check.setChecked(True)
 
         self.screw_r_spin   = _spin(0.5, 100.0,   6.0, dec=2)
-        self.extend_spin    = _spin(0.1, 5000.0,  20.0)
         self.nut_r_spin     = _spin(1.0, 200.0,   10.0, dec=2)
         self.nut_h_spin     = _spin(0.5, 200.0,    8.0)
         self.pitch_spin     = _spin(0.1,  20.0,    3.0, dec=2)
+        # extend_spin is kept for get_params() backward compatibility so that
+        # callers receiving the params dict always find an 'extend_amount' key.
+        # It is hidden because extend_amount no longer drives any geometry.
+        self.extend_spin    = _spin(0.1, 5000.0,  20.0)
+        self.extend_spin.setVisible(False)
 
         # Enable/disable screw widgets when checkbox is toggled
-        for w in (self.screw_r_spin, self.extend_spin, self.nut_r_spin,
+        for w in (self.screw_r_spin, self.nut_r_spin,
                   self.nut_h_spin, self.pitch_spin):
             w.setEnabled(self.screw_check.isChecked())
 
         self.screw_check.toggled.connect(self.screw_r_spin.setEnabled)
-        self.screw_check.toggled.connect(self.extend_spin.setEnabled)
         self.screw_check.toggled.connect(self.nut_r_spin.setEnabled)
         self.screw_check.toggled.connect(self.nut_h_spin.setEnabled)
         self.screw_check.toggled.connect(self.pitch_spin.setEnabled)
@@ -653,31 +656,28 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
         form.addRow(self.screw_check)
 
         screw_grid = QtWidgets.QGridLayout()
-        screw_grid.addWidget(QtWidgets.QLabel("Shaft radius:"),          0, 0)
-        screw_grid.addWidget(self.screw_r_spin,                          0, 1)
-        screw_grid.addWidget(QtWidgets.QLabel("Extension above prism:"), 0, 2)
-        screw_grid.addWidget(self.extend_spin,                           0, 3)
-        screw_grid.addWidget(QtWidgets.QLabel("Nut flat radius:"),       1, 0)
-        screw_grid.addWidget(self.nut_r_spin,                            1, 1)
-        screw_grid.addWidget(QtWidgets.QLabel("Nut height:"),            1, 2)
-        screw_grid.addWidget(self.nut_h_spin,                            1, 3)
-        screw_grid.addWidget(QtWidgets.QLabel("Thread pitch:"),          2, 0)
-        screw_grid.addWidget(self.pitch_spin,                            2, 1)
+        screw_grid.addWidget(QtWidgets.QLabel("Shaft radius:"),    0, 0)
+        screw_grid.addWidget(self.screw_r_spin,                    0, 1)
+        screw_grid.addWidget(QtWidgets.QLabel("Nut flat radius:"), 0, 2)
+        screw_grid.addWidget(self.nut_r_spin,                      0, 3)
+        screw_grid.addWidget(QtWidgets.QLabel("Nut height:"),      1, 0)
+        screw_grid.addWidget(self.nut_h_spin,                      1, 1)
+        screw_grid.addWidget(QtWidgets.QLabel("Thread pitch:"),    1, 2)
+        screw_grid.addWidget(self.pitch_spin,                      1, 3)
         form.addRow("Screw / nut:", screw_grid)
 
         info = QtWidgets.QLabel(
             "<i><b>Front / Back</b>: the prism face at Y=0 has the given width "
             "and height; the face at Y=Length has the back dimensions. "
-            "<b>Split height</b>: the prism is cut horizontally at this Z, "
-            "producing a bottom piece and a top piece. "
-            "<b>Shaft radius</b>: minor (root) radius of the printed screw. "
-            "<b>Extension</b>: no longer used — the post stub length above the "
-            "prism is now set automatically to match the nut height. "
+            "<b>Split height</b>: the prism is cut horizontally at this Z. "
+            "<b>Shaft radius</b>: minor (root) radius of the screw post. "
             "<b>Nut flat radius</b>: flat-to-centre apothem of the hex nut. "
-            "The screw axis is automatically oriented perpendicular to the top "
-            "face so the nut sits flush on it when tightened. "
+            "<b>Nut height</b>: thickness of the nut; the nut sits in a "
+            "recessed hex pocket so its top is flush with the prism surface. "
+            "The screw axis is automatically perpendicular to the top face. "
             "<b>Thread pitch</b>: axial distance between thread crests (mm); "
-            "3 mm is recommended for FDM printing.</i>"
+            "3 mm is recommended for FDM printing. "
+            "The nut bore has matching internal threads.</i>"
         )
         info.setWordWrap(True)
 

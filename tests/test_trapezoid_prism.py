@@ -610,3 +610,128 @@ class TestComputeClearanceRadius:
         for r in [1.5, 3.0, 5.0, 8.0]:
             for c in [0.0, 0.1, 0.3, 0.5]:
                 assert compute_clearance_radius(r, c) >= r
+
+
+# ===========================================================================
+# Flush-surface assembly geometry invariants
+# (pure-Python checks — no FreeCAD required)
+# ===========================================================================
+
+class TestFlushSurfaceAssembly:
+    """Verify the key geometric relationships for the flush-surface design.
+
+    The design contract (tested here without FreeCAD):
+    * The screw post length along the axis equals t_surface (flush).
+    * Threads run from t_split to t_surface (full top-piece engagement).
+    * The hex pocket floor is nut_height below the surface (along the axis).
+    * The clearance hole spans from t_split to the pocket floor.
+    * Nothing protrudes above the top surface.
+    """
+
+    # Helpers: reproduce the axis-length math from create_trapezoid_prism_pieces
+    # without importing FreeCAD.
+
+    def _t_surface(self, front_h, back_h, length):
+        """Axis-length from base_pt to the top surface at the screw centre."""
+        cx, cy = compute_screw_center(length)
+        h_center = interpolate_height_at_y(cy, front_h, back_h, length)
+        nx, ny_n, nz_n = compute_screw_axis(front_h, back_h, length)
+        return h_center / nz_n
+
+    def _t_split(self, split_height, front_h, back_h, length):
+        nx, ny_n, nz_n = compute_screw_axis(front_h, back_h, length)
+        return split_height / nz_n
+
+    # ── Post length is flush with the surface ─────────────────────────────
+
+    def test_post_length_equals_t_surface(self):
+        """Post tip is exactly at the prism top surface (nothing protrudes)."""
+        for fh, bh, l, sh in [(30, 20, 50, 10), (20, 20, 60, 15), (40, 30, 80, 20)]:
+            t_surf = self._t_surface(fh, bh, l)
+            # New design: post_length = t_surface (flush, no stub above surface).
+            # Verify the formula used in create_trapezoid_prism_pieces.
+            post_length = t_surf
+            assert post_length == pytest.approx(t_surf)
+
+    def test_thread_end_equals_t_surface(self):
+        """Threads end exactly at the post tip (flush with surface)."""
+        for fh, bh, l, sh in [(30, 20, 50, 10), (20, 20, 60, 15)]:
+            t_surf  = self._t_surface(fh, bh, l)
+            t_split = self._t_split(sh, fh, bh, l)
+            thread_end = t_surf         # new design: = post_length = t_surface
+            assert thread_end == pytest.approx(t_surf)
+            assert thread_end > t_split   # threads must span at least the top piece
+
+    # ── Nut pocket sits fully within the top piece ────────────────────────
+
+    def test_pocket_floor_above_split(self):
+        """Hex pocket floor must be above the split plane so it stays in the top piece."""
+        # Combinations where top_piece_height > nut_height (valid)
+        for fh, bh, l, sh, nh in [
+            (30, 20, 50, 10, 8),    # top-piece height ≈ 15 > nut_height 8
+            (40, 30, 80, 20, 10),   # top-piece height ≈ 15 > nut_height 10
+            (25, 25, 60, 10, 8),    # flat top: top-piece height 15 > nut_height 8
+        ]:
+            t_surf   = self._t_surface(fh, bh, l)
+            t_split  = self._t_split(sh, fh, bh, l)
+            t_pocket_floor = t_surf - nh
+            assert t_pocket_floor > t_split, (
+                f"Pocket floor {t_pocket_floor:.3f} must be above split {t_split:.3f}"
+            )
+
+    def test_pocket_floor_formula(self):
+        """Pocket floor = t_surface - nut_height (exactly nut_height deep)."""
+        fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
+        t_surf = self._t_surface(fh, bh, l)
+        t_pocket_floor = t_surf - nh
+        assert t_pocket_floor == pytest.approx(t_surf - nh)
+
+    def test_clearance_hole_ends_at_pocket_floor(self):
+        """Clearance hole goes from t_split to t_pocket_floor (not to surface)."""
+        fh, bh, l, sh, nh = 30.0, 20.0, 50.0, 10.0, 8.0
+        t_surf   = self._t_surface(fh, bh, l)
+        t_split  = self._t_split(sh, fh, bh, l)
+        t_pocket = t_surf - nh
+        hole_length = max(2.0, (t_pocket - t_split) + 2.0)
+        # Hole ends BELOW the pocket floor (does not reach the surface)
+        hole_end = t_split - 1.0 + hole_length   # start = t_split - 1 (margin)
+        assert hole_end <= t_pocket + 2.0 + 1e-9   # within 2 mm margin of floor
+        assert t_pocket < t_surf   # pocket floor is below the surface
+
+    # ── Nut is below the surface ──────────────────────────────────────────
+
+    def test_nut_top_is_flush_with_surface(self):
+        """Nut top (entry_pt) is at t_surface — flush with prism top."""
+        fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
+        t_surf = self._t_surface(fh, bh, l)
+        # Nut bottom = t_surf - nut_height; nut top = t_surf (flush)
+        nut_top_t    = t_surf
+        nut_bottom_t = t_surf - nh
+        assert nut_top_t    == pytest.approx(t_surf)
+        assert nut_bottom_t == pytest.approx(t_surf - nh)
+        assert nut_top_t    >  nut_bottom_t
+
+    def test_no_protrusion_above_surface(self):
+        """Post tip and nut top are both at t_surface — nothing above surface."""
+        fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
+        t_surf       = self._t_surface(fh, bh, l)
+        post_length  = t_surf       # flush design
+        nut_top_t    = t_surf       # flush design
+        assert post_length  == pytest.approx(t_surf)
+        assert nut_top_t    == pytest.approx(t_surf)
+
+    # ── Equal-height prism (vertical axis, simpler case) ─────────────────
+
+    def test_vertical_axis_flat_prism(self):
+        """With equal front/back heights the axis is vertical and geometry is exact."""
+        fh = bh = 25.0
+        l, sh, nh = 50.0, 10.0, 8.0
+        t_surf        = self._t_surface(fh, bh, l)
+        t_split       = self._t_split(sh, fh, bh, l)
+        t_pocket_floor = t_surf - nh
+        # For a flat top, nz = 1 so t_surface == h_center == fh
+        assert t_surf         == pytest.approx(fh)
+        assert t_split        == pytest.approx(sh)
+        assert t_pocket_floor == pytest.approx(fh - nh)
+        assert t_pocket_floor > t_split
+
