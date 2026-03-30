@@ -34,26 +34,32 @@ Screw assembly
 --------------
 When *add_screw* is True an integral screw post is added:
 
-* The **screw post** is a cylinder centred at the XY midpoint of the prism.
-  It is fused with the bottom piece and rises from Z = 0 to
-  Z = max_h + nut_height, providing a threaded stub above the prism that
-  the nut can engage.
+* The **screw axis** is perpendicular to the prism's top face.  When the
+  front and back heights are equal the top face is horizontal and the axis is
+  vertical.  When they differ the top face is a sloped plane and the axis is
+  tilted in the YZ plane by the same slope angle — this is the only
+  orientation in which the nut can sit flush on the top face.
 
-* The **threaded region** spans from Z = split_height (bottom of the top
-  piece) to Z = max_h + nut_height (top of the stub above the prism).
-  Threading the full top piece gives the nut plenty of engagement as it is
-  turned; the stub above the prism is the final engagement zone when the
-  nut is fully seated.  Threads are approximated by revolved rings (one per
-  pitch interval), each with a triangular cross-section.  This approach is
-  robust across all FreeCAD/OCCT versions and produces geometry that prints
-  well on FDM machines.
+* The **screw post** is a cylinder fused with the bottom piece.  Its base is
+  at Z = 0 (the screw axis meets the bottom face at this height), and it
+  extends along the tilted screw axis through the split plane, through the
+  full top piece, and a further ``nut_height`` mm above the top face —
+  providing a threaded stub onto which the nut is tightened.
 
-* The **clearance hole** in the top piece is a smooth cylinder of radius
-  ``screw_radius + clearance`` drilled along the full height of the top piece.
+* The **threaded region** starts where the screw axis crosses the split plane
+  and ends at the top of the stub above the prism.  Threading the full top
+  piece gives the nut plenty of engagement as it is turned down.  Threads
+  are approximated by revolved rings (one per pitch interval), each with a
+  triangular cross-section.  This approach is robust across all FreeCAD /
+  OCCT versions and produces geometry that prints well on FDM machines.
+
+* The **clearance hole** in the top piece is a smooth cylinder bored along
+  the screw axis through the full height of the top piece.
 
 * The **nut** is a separate hexagonal prism with a central smooth bore.
-  It is placed at Z = max_h so that its **bottom face is flush with the top
-  surface of the prism**.  The nut protrudes above the prism by nut_height.
+  Its bottom face is coplanar with the prism's top surface at the screw
+  centre — i.e., the bottom of the nut is flush with the surface below it.
+  The nut protrudes above the prism by ``nut_height`` mm.
 
 All dimensions are in millimetres.
 """
@@ -359,6 +365,41 @@ def compute_screw_center(
     return (0.0, length / 2.0)
 
 
+def compute_screw_axis(
+    front_h: float,
+    back_h: float,
+    length: float,
+) -> tuple:
+    """Return the unit normal to the prism's top face (the screw axis direction).
+
+    The screw must be perpendicular to the top face so that the nut can sit
+    flush on it when tightened.  The top face is a plane whose Z coordinate
+    varies linearly with Y:  ``z(y) = front_h + (back_h − front_h) × y / length``.
+
+    The outward (upward) normal to this plane is
+    ``(0, −(back_h − front_h)/length, 1)`` before normalisation.  When
+    ``front_h == back_h`` the face is horizontal and the normal reduces to
+    ``(0, 0, 1)`` (vertical).
+
+    Parameters
+    ----------
+    front_h : height of the front face (mm)
+    back_h  : height of the back face (mm)
+    length  : prism depth front-to-back (mm); if ≤ 0 returns vertical
+
+    Returns
+    -------
+    ``(nx, ny, nz)`` unit-normal tuple (all floats, ``nx`` is always 0.0)
+    """
+    if length <= 0.0:
+        return (0.0, 0.0, 1.0)
+    slope = (float(back_h) - float(front_h)) / float(length)
+    ny    = -slope
+    nz    = 1.0
+    mag   = math.sqrt(ny * ny + nz * nz)
+    return (0.0, ny / mag, nz / mag)
+
+
 def compute_nut_geometry(
     screw_radius: float,
     nut_flat_radius: float,
@@ -493,31 +534,36 @@ def _make_slice_box(x_half: float, y_half: float, z_lo: float, z_hi: float) -> o
 
 
 def _make_screw_post(
-    cx: float,
-    cy: float,
+    base_pt,
+    axis_dir,
     shaft_r: float,
-    post_height: float,
-    thread_start_z: float,
-    thread_end_z: float,
+    post_length: float,
+    thread_start_t: float,
+    thread_end_t: float,
     thread_pitch: float,
     thread_depth_ratio: float = DEFAULT_THREAD_DEPTH_RATIO,
 ) -> object:
     """Return a FreeCAD solid representing the full screw post (shaft + threads).
 
-    Thread ridges are created as **revolved rings** — one per pitch interval —
-    rather than a helical sweep.  Each ring has a triangular cross-section
-    (inner edge at the shaft surface, crest at the midpoint, inner edge again
-    at the next pitch boundary) revolved 360° around the shaft axis.  This
-    approach is robust across all FreeCAD / OCCT versions and produces clean,
-    manifold solids that print well on FDM machines.
+    The post is a cylinder of radius *shaft_r* and length *post_length* built
+    along *axis_dir* starting from *base_pt*.  Thread ridges are created as
+    **revolved rings** — one per pitch interval — between *thread_start_t* and
+    *thread_end_t* (distances along the axis from *base_pt*).  Each ring has a
+    triangular cross-section (inner at shaft surface → crest → inner) revolved
+    360° around the screw axis.
+
+    The axis direction must have ``nx == 0`` (the X component is always zero
+    for this geometry) so that the radial direction used for the thread profile
+    can safely be taken as the global X axis.
 
     Parameters
     ----------
-    cx, cy           : XY centre (mm)
-    shaft_r          : shaft radius (mm) — the minor radius
-    post_height      : total post height from Z = 0 (mm)
-    thread_start_z   : Z where threads begin (mm)
-    thread_end_z     : Z where threads end (mm) — equals post top
+    base_pt          : ``App.Vector`` — base of the post (at Z = 0)
+    axis_dir         : ``App.Vector`` — unit direction along the post
+    shaft_r          : shaft (minor) radius (mm)
+    post_length      : total length of the shaft cylinder along *axis_dir* (mm)
+    thread_start_t   : distance along axis from *base_pt* where threads begin (mm)
+    thread_end_t     : distance along axis from *base_pt* where threads end (mm)
     thread_pitch     : thread pitch (mm)
     thread_depth_ratio : depth = pitch × ratio
 
@@ -531,47 +577,37 @@ def _make_screw_post(
     depth   = thread_pitch * thread_depth_ratio
     major_r = shaft_r + depth
 
-    # ── Shaft cylinder (full height from Z = 0) ─────────────────────────
-    shaft = Part.makeCylinder(shaft_r, post_height, App.Vector(cx, cy, 0.0))
+    # ── Shaft cylinder along the tilted axis ─────────────────────────────
+    shaft = Part.makeCylinder(shaft_r, post_length, base_pt, axis_dir)
 
-    thread_height = thread_end_z - thread_start_z
-    if thread_height < thread_pitch:
-        # Not enough height for even one full turn — return plain shaft
+    thread_length = thread_end_t - thread_start_t
+    if thread_length < thread_pitch:
+        # Not enough length for even one full turn — return plain shaft
         return shaft
 
     # ── Revolved ring thread ridges ──────────────────────────────────────
-    # Each ring covers exactly one pitch and has a symmetric triangular
-    # profile: inner at shaft_r (bottom), crest at major_r (midpoint),
-    # inner at shaft_r (top).  Revolving 360° around the shaft axis
-    # produces a raised ring with a pointed crest — ideal for FDM printing.
-    #
-    # Only complete rings are created (int() truncation).  Any remaining
-    # fraction of a pitch at the top of the extension is left as plain
-    # shaft — a partial ring would produce a sharp half-tooth that is
-    # fragile and difficult to print reliably on FDM machines.
-    axis_pt  = App.Vector(cx, cy, 0.0)
-    axis_dir = App.Vector(0.0, 0.0, 1.0)
+    # The radial direction is always the global X axis because axis_dir has
+    # no X component (nx = 0 always).  This guarantees the thread profile
+    # plane always contains the screw axis.
+    radial_dir = App.Vector(1.0, 0.0, 0.0)
 
-    n_rings = int(thread_height / thread_pitch)
+    n_rings = int(thread_length / thread_pitch)
     ridges  = []
     for i in range(n_rings):
-        z0  = thread_start_z + i * thread_pitch
-        z_m = z0 + thread_pitch / 2.0
-        z1  = z0 + thread_pitch
+        t0  = thread_start_t + i * thread_pitch
+        t_m = t0 + thread_pitch / 2.0
+        t1  = t0 + thread_pitch
 
-        v_bot   = App.Vector(cx + shaft_r, cy, z0)
-        v_crest = App.Vector(cx + major_r, cy, z_m)
-        v_top   = App.Vector(cx + shaft_r, cy, z1)
+        # Axial positions along the screw axis + radial offsets
+        v_bot   = base_pt + axis_dir * t0  + radial_dir * shaft_r
+        v_crest = base_pt + axis_dir * t_m + radial_dir * major_r
+        v_top   = base_pt + axis_dir * t1  + radial_dir * shaft_r
 
         wire  = Part.makePolygon([v_bot, v_crest, v_top, v_bot])
         face  = Part.Face(wire)
-        ridge = face.revolve(axis_pt, axis_dir, 360.0)
+        ridge = face.revolve(base_pt, axis_dir, 360.0)
         ridges.append(ridge)
 
-    # At least one ring is guaranteed here because thread_height >= thread_pitch
-    # was checked above and n_rings >= 1.
-
-    # Fuse all ridges, then fuse the result with the shaft
     thread_body = ridges[0]
     for r in ridges[1:]:
         thread_body = thread_body.fuse(r)
@@ -579,50 +615,75 @@ def _make_screw_post(
     return shaft.fuse(thread_body)
 
 
-def _make_hex_solid(cx: float, cy: float, z0: float, apothem: float, height: float) -> object:
-    """Return a hexagonal prism centred at (cx, cy), starting at Z = z0.
+def _make_hex_solid(
+    center_pt,
+    axis_dir,
+    apothem: float,
+    height: float,
+) -> object:
+    """Return a hexagonal prism centred at *center_pt*, extruded along *axis_dir*.
 
     Parameters
     ----------
-    cx, cy   : XY centre (mm)
-    z0       : bottom Z of the hex prism (mm)
-    apothem  : flat-to-centre (inradius) of the hexagon (mm)
-    height   : height of the prism (mm)
+    center_pt : ``App.Vector`` — centre of the bottom hex face
+    axis_dir  : ``App.Vector`` — unit direction (extrusion axis)
+    apothem   : flat-to-centre (inradius) of the hexagon (mm)
+    height    : height of the prism along *axis_dir* (mm)
 
     Returns
     -------
     Part.Shape (solid)
+
+    Notes
+    -----
+    The axis direction must have ``nx == 0`` (global X is always in the plane
+    of the hex face), so the local XY frame is:
+
+    * **local_x** = ``(1, 0, 0)``  (global X)
+    * **local_y** = ``axis_dir × local_x`` = ``(0, nz, −ny)``
     """
     import Part
     import FreeCAD as App
 
-    r = apothem / math.cos(math.pi / 6.0)   # circumradius
-    pts = [
-        App.Vector(cx + r * math.cos(math.pi / 6.0 + i * math.pi / 3.0),
-                   cy + r * math.sin(math.pi / 6.0 + i * math.pi / 3.0),
-                   z0)
-        for i in range(6)
-    ]
-    pts.append(pts[0])                       # close the polygon
+    circumradius = apothem / math.cos(math.pi / 6.0)
+
+    # Build the local frame in the plane perpendicular to axis_dir.
+    # Since axis_dir = (0, ny, nz), global X is always perpendicular.
+    local_x = App.Vector(1.0, 0.0, 0.0)
+    local_y = App.Vector(0.0, axis_dir.z, -axis_dir.y)  # axis_dir × local_x
+
+    pts = []
+    for i in range(6):
+        angle = math.pi / 6.0 + i * math.pi / 3.0
+        pt = (
+            center_pt
+            + local_x * (circumradius * math.cos(angle))
+            + local_y * (circumradius * math.sin(angle))
+        )
+        pts.append(pt)
+    pts.append(pts[0])          # close the polygon
     wire = Part.makePolygon(pts)
     face = Part.Face(wire)
-    return face.extrude(App.Vector(0.0, 0.0, height))
+    return face.extrude(axis_dir * height)
 
 
 def make_nut_solid(
-    cx: float,
-    cy: float,
-    z0: float,
+    entry_pt,
+    axis_dir,
     nut_flat_radius: float,
     nut_height: float,
     bore_radius: float,
 ) -> object:
     """Return a FreeCAD solid for the hexagonal nut with a central bore.
 
+    The nut is oriented along *axis_dir* (the screw axis) so that its flat
+    faces are perpendicular to the screw.  The bottom face of the nut sits at
+    *entry_pt* — the point on the prism's top surface where the screw exits.
+
     Parameters
     ----------
-    cx, cy          : XY centre (mm)
-    z0              : Z of the nut bottom face (mm)
+    entry_pt        : ``App.Vector`` — centre of the nut's bottom face
+    axis_dir        : ``App.Vector`` — unit screw axis direction
     nut_flat_radius : apothem (flat-to-centre) of the nut hex (mm)
     nut_height      : nut thickness (mm)
     bore_radius     : radius of the smooth central bore (mm)
@@ -633,10 +694,9 @@ def make_nut_solid(
     """
     _require_freecad()
     import Part
-    import FreeCAD as App
 
-    hex_solid = _make_hex_solid(cx, cy, z0, nut_flat_radius, nut_height)
-    bore = Part.makeCylinder(bore_radius, nut_height, App.Vector(cx, cy, z0))
+    hex_solid = _make_hex_solid(entry_pt, axis_dir, nut_flat_radius, nut_height)
+    bore = Part.makeCylinder(bore_radius, nut_height, entry_pt, axis_dir)
     return hex_solid.cut(bore)
 
 
@@ -676,12 +736,14 @@ def create_trapezoid_prism_pieces(
         is True this piece includes the integral screw post fused to it.
 
     ``TP_Top``
-        Upper half of the prism (Z = split_height … max_h).  When *add_screw*
-        is True a smooth clearance hole is cut through the full height.
+        Upper half of the prism (Z = split_height … prism top).  When
+        *add_screw* is True a smooth clearance hole is bored along the tilted
+        screw axis through the full height of the top piece.
 
     ``TP_Nut`` *(only when add_screw is True)*
-        Hexagonal nut with smooth central bore, placed at Z = max_h so its
-        bottom face is flush with the prism top surface.
+        Hexagonal nut with smooth central bore, oriented along the screw axis
+        and placed so that its bottom face is flush with the prism's top
+        surface at the screw centre.
 
     Parameters
     ----------
@@ -740,45 +802,72 @@ def create_trapezoid_prism_pieces(
     top_piece = full_prism.cut(lower_box)
 
     if add_screw:
-        heights = compute_screw_heights(
-            split_height, front_h, back_h, extend_amount,
-            nut_height=nut_height,
-        )
-        cx, cy  = compute_screw_center(length)
+        import FreeCAD as App  # noqa: F811 (already imported above, but clearer here)
 
-        # Screw post (shaft + threads spanning full top-piece height)
+        # ── Compute screw axis (perpendicular to the top face) ────────────
+        # The top face is the plane z = front_h + (back_h-front_h)*y/length.
+        # Its outward unit normal IS the screw axis direction.
+        nx, ny_n, nz_n = compute_screw_axis(front_h, back_h, length)
+        axis_dir = App.Vector(nx, ny_n, nz_n)
+
+        # ── Entry point: where the screw axis meets the top surface ───────
+        cx, cy   = compute_screw_center(length)
+        h_center = interpolate_height_at_y(cy, front_h, back_h, length)
+        entry_pt = App.Vector(cx, cy, h_center)
+
+        # ── Base point of the post at Z = 0 ───────────────────────────────
+        # The axis goes through entry_pt in direction axis_dir.  Walking
+        # downward (−axis_dir) from entry_pt until z = 0 gives base_pt.
+        # Δt = h_center / nz_n  (nz_n > 0 always for valid prisms)
+        t_surface = h_center / nz_n          # axis-length from base to top surface
+        base_pt   = App.Vector(cx,
+                               cy - t_surface * ny_n,
+                               0.0)
+
+        # ── Axis-length positions of key Z planes ─────────────────────────
+        # Split plane (Z = split_height): how far along axis from base_pt
+        t_split = split_height / nz_n
+
+        # Post extends from base_pt through the top surface and nut_height
+        # further — giving the nut full thread engagement.
+        post_length    = t_surface + nut_height
+        thread_start_t = t_split
+        thread_end_t   = post_length
+
+        # ── Screw post (tilted shaft + threads) ───────────────────────────
         screw_post = _make_screw_post(
-            cx, cy,
-            shaft_r=screw_radius,
-            post_height=heights["post_total_height"],
-            thread_start_z=heights["threaded_start_z"],
-            thread_end_z=heights["threaded_end_z"],
-            thread_pitch=thread_pitch,
-            thread_depth_ratio=thread_depth_ratio,
+            base_pt,
+            axis_dir,
+            shaft_r        = screw_radius,
+            post_length    = post_length,
+            thread_start_t = thread_start_t,
+            thread_end_t   = thread_end_t,
+            thread_pitch   = thread_pitch,
+            thread_depth_ratio = thread_depth_ratio,
         )
-
-        # Fuse screw post with bottom piece
         bottom_piece = bottom_piece.fuse(screw_post)
 
-        # Clearance hole through the full height of the top piece
-        hole_r = compute_clearance_radius(screw_radius, clearance)
-        top_piece_h = heights["top_piece_height"]
-        hole = Part.makeCylinder(hole_r, top_piece_h + 1.0,
-                                 App.Vector(cx, cy, split_height - 0.5))
+        # ── Clearance hole through the top piece (tilted) ─────────────────
+        hole_r       = compute_clearance_radius(screw_radius, clearance)
+        # The hole must span the top piece: from just below the split plane
+        # to just above the top surface.  Add 1 mm margin on each end.
+        hole_start_pt = base_pt + axis_dir * (t_split - 1.0)
+        hole_length   = (t_surface - t_split) + 2.0
+        hole = Part.makeCylinder(hole_r, hole_length, hole_start_pt, axis_dir)
         top_piece = top_piece.cut(hole)
 
-        # Nut — placed so its bottom face is flush with the prism top (Z = max_h)
+        # ── Nut (tilted, bottom flush with top surface) ───────────────────
         thread_depth = thread_pitch * thread_depth_ratio
         nut_geo = compute_nut_geometry(
             screw_radius, nut_flat_radius, nut_height, clearance,
             thread_depth=thread_depth,
         )
         nut_shape = make_nut_solid(
-            cx, cy,
-            z0=heights["nut_bottom_z"],
-            nut_flat_radius=nut_geo["flat_radius"],
-            nut_height=nut_geo["height"],
-            bore_radius=nut_geo["bore_radius"],
+            entry_pt,
+            axis_dir,
+            nut_flat_radius = nut_geo["flat_radius"],
+            nut_height      = nut_geo["height"],
+            bore_radius     = nut_geo["bore_radius"],
         )
 
         pieces = [

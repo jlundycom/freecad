@@ -29,6 +29,7 @@ from freecad.HexLatticeMaker.trapezoid_prism_core import (
     compute_thread_params,
     compute_screw_heights,
     compute_screw_center,
+    compute_screw_axis,
     compute_nut_geometry,
     compute_clearance_radius,
 )
@@ -445,8 +446,80 @@ class TestComputeScrewCenter:
 
 
 # ===========================================================================
-# compute_nut_geometry
+# compute_screw_axis
 # ===========================================================================
+
+class TestComputeScrewAxis:
+    def test_equal_heights_returns_vertical(self):
+        """When front_h == back_h the top face is flat and the axis is (0,0,1)."""
+        nx, ny, nz = compute_screw_axis(30.0, 30.0, 50.0)
+        assert nx == pytest.approx(0.0)
+        assert ny == pytest.approx(0.0)
+        assert nz == pytest.approx(1.0)
+
+    def test_is_unit_vector(self):
+        """The returned normal must always have magnitude 1."""
+        for fh, bh, l in [(30, 20, 50), (10, 40, 100), (50, 50, 60), (20, 5, 80)]:
+            nx, ny, nz = compute_screw_axis(fh, bh, l)
+            assert math.sqrt(nx**2 + ny**2 + nz**2) == pytest.approx(1.0, rel=1e-9)
+
+    def test_nx_always_zero(self):
+        """X component is always zero — tilt is only in the YZ plane."""
+        for fh, bh, l in [(30, 20, 50), (10, 40, 100), (50, 50, 60)]:
+            nx, ny, nz = compute_screw_axis(fh, bh, l)
+            assert nx == pytest.approx(0.0)
+
+    def test_nz_always_positive(self):
+        """Z component is always positive (normal points upward)."""
+        for fh, bh, l in [(30, 20, 50), (10, 40, 100), (20, 20, 60), (5, 50, 80)]:
+            nx, ny, nz = compute_screw_axis(fh, bh, l)
+            assert nz > 0.0
+
+    def test_tilt_direction_front_taller(self):
+        """When front is taller the slope goes down toward the back (positive ny)."""
+        nx, ny, nz = compute_screw_axis(front_h=30.0, back_h=20.0, length=50.0)
+        # Top surface slopes downward in +Y direction → normal tilts toward +Y
+        assert ny > 0.0
+
+    def test_tilt_direction_back_taller(self):
+        """When back is taller the slope goes up toward the back (negative ny)."""
+        nx, ny, nz = compute_screw_axis(front_h=20.0, back_h=30.0, length=50.0)
+        # Top surface slopes upward in +Y direction → normal tilts toward -Y
+        assert ny < 0.0
+
+    def test_default_values_correct(self):
+        """Default dialog values: front_h=30, back_h=20, length=50."""
+        nx, ny, nz = compute_screw_axis(30.0, 20.0, 50.0)
+        expected_slope = (20.0 - 30.0) / 50.0   # = -0.2
+        expected_ny_unnorm = 0.2                  # −(−0.2)
+        expected_nz_unnorm = 1.0
+        mag = math.sqrt(expected_ny_unnorm**2 + expected_nz_unnorm**2)
+        assert ny == pytest.approx(expected_ny_unnorm / mag, rel=1e-9)
+        assert nz == pytest.approx(expected_nz_unnorm / mag, rel=1e-9)
+
+    def test_zero_length_returns_vertical(self):
+        """Degenerate length ≤ 0 falls back to the vertical axis."""
+        assert compute_screw_axis(30.0, 20.0, 0.0) == (0.0, 0.0, 1.0)
+
+    def test_symmetry(self):
+        """Swapping front_h and back_h negates ny (mirror symmetry)."""
+        nx1, ny1, nz1 = compute_screw_axis(30.0, 20.0, 50.0)
+        nx2, ny2, nz2 = compute_screw_axis(20.0, 30.0, 50.0)
+        assert ny1 == pytest.approx(-ny2, rel=1e-9)
+        assert nz1 == pytest.approx(nz2, rel=1e-9)
+
+    def test_angle_matches_slope(self):
+        """The tilt angle of the normal equals the slope angle of the top face."""
+        front_h, back_h, length = 30.0, 20.0, 50.0
+        slope = (back_h - front_h) / length   # = -0.2
+        # Slope angle from horizontal (negative = downward in +Y)
+        slope_angle = math.atan(abs(slope))
+        nx, ny, nz = compute_screw_axis(front_h, back_h, length)
+        normal_tilt = math.atan(abs(ny) / abs(nz))
+        assert normal_tilt == pytest.approx(slope_angle, rel=1e-9)
+
+
+
 
 class TestComputeNutGeometry:
     def _call(self, screw_r=3.0, flat_r=6.0, height=5.0, clearance=DEFAULT_SCREW_CLEARANCE,

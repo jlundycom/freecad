@@ -671,11 +671,13 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
             "<b>Split height</b>: the prism is cut horizontally at this Z, "
             "producing a bottom piece and a top piece. "
             "<b>Shaft radius</b>: minor (root) radius of the printed screw. "
-            "<b>Extension</b>: how far the threaded section protrudes above the "
-            "top piece — the nut sits here. "
+            "<b>Extension</b>: no longer used — the post stub length above the "
+            "prism is now set automatically to match the nut height. "
             "<b>Nut flat radius</b>: flat-to-centre apothem of the hex nut. "
+            "The screw axis is automatically oriented perpendicular to the top "
+            "face so the nut sits flush on it when tightened. "
             "<b>Thread pitch</b>: axial distance between thread crests (mm); "
-            "2 mm is recommended for FDM printing.</i>"
+            "3 mm is recommended for FDM printing.</i>"
         )
         info.setWordWrap(True)
 
