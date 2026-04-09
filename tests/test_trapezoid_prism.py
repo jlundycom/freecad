@@ -131,9 +131,19 @@ class TestValidateTrapezoidPrismParams:
         errors = validate_trapezoid_prism_params(**self._valid(screw_radius=0.0))
         assert any("screw_radius" in e for e in errors)
 
-    def test_extend_amount_ignored_by_validator(self):
-        """extend_amount is deprecated; any value (including zero) is accepted."""
+    def test_extend_amount_must_be_positive(self):
+        """extend_amount <= 0 is invalid."""
         errors = validate_trapezoid_prism_params(**self._valid(extend_amount=0.0))
+        assert any("extend_amount" in e for e in errors)
+
+    def test_extend_amount_less_than_nut_height_warns(self):
+        """extend_amount < nut_height produces a warning error."""
+        errors = validate_trapezoid_prism_params(**self._valid(extend_amount=3.0, nut_height=8.0))
+        assert any("extend_amount" in e for e in errors)
+
+    def test_extend_amount_at_least_nut_height_is_valid(self):
+        """extend_amount >= nut_height is accepted without errors."""
+        errors = validate_trapezoid_prism_params(**self._valid(extend_amount=8.0, nut_height=8.0))
         assert not any("extend_amount" in e for e in errors)
 
     def test_nut_radius_less_than_screw_radius_invalid(self):
@@ -372,42 +382,44 @@ class TestComputeScrewHeights:
         d = self._call(split_height=10.0, front_h=30.0, back_h=20.0)
         assert d["top_piece_height"] == pytest.approx(30.0 - 10.0)
 
-    def test_post_total_height_equals_max_h_plus_nut(self):
-        """Post extends above prism by nut_height to give the nut threads to engage."""
-        d = self._call(front_h=30.0, back_h=20.0, nut_height=8.0)
-        assert d["post_total_height"] == pytest.approx(30.0 + 8.0)
+    def test_post_total_height_equals_max_h_plus_extend(self):
+        """Post extends above prism by extend_amount (configurable stub)."""
+        d = self._call(front_h=30.0, back_h=20.0, extend_amount=20.0)
+        assert d["post_total_height"] == pytest.approx(30.0 + 20.0)
 
-    def test_post_total_height_independent_of_extend_amount(self):
-        """extend_amount is deprecated; post height is driven by nut_height."""
+    def test_post_total_height_varies_with_extend_amount(self):
+        """Post height changes with extend_amount (it is an active parameter)."""
         d1 = self._call(front_h=30.0, nut_height=8.0, extend_amount=5.0)
         d2 = self._call(front_h=30.0, nut_height=8.0, extend_amount=99.0)
-        assert d1["post_total_height"] == pytest.approx(d2["post_total_height"])
+        assert d1["post_total_height"] == pytest.approx(30.0 + 5.0)
+        assert d2["post_total_height"] == pytest.approx(30.0 + 99.0)
 
     def test_threaded_start_equals_split_height(self):
         """Threads begin at the split plane (bottom of the top piece)."""
         d = self._call(split_height=10.0, front_h=30.0, back_h=20.0)
         assert d["threaded_start_z"] == pytest.approx(10.0)
 
-    def test_threaded_end_equals_max_h_plus_nut(self):
+    def test_threaded_end_equals_max_h_plus_extend(self):
         """Threads extend through the full top piece and the stub above."""
+        d = self._call(front_h=30.0, back_h=20.0, extend_amount=20.0)
+        assert d["threaded_end_z"] == pytest.approx(30.0 + 20.0)
+
+    def test_nut_bottom_z_equals_max_h_minus_nut_height(self):
+        """Nut bottom when fully tightened is nut_height below the prism top surface."""
         d = self._call(front_h=30.0, back_h=20.0, nut_height=8.0)
-        assert d["threaded_end_z"] == pytest.approx(30.0 + 8.0)
+        assert d["nut_bottom_z"] == pytest.approx(30.0 - 8.0)
 
-    def test_nut_bottom_z_equals_max_prism_height(self):
-        """Nut bottom is flush with the prism top surface."""
-        d = self._call(front_h=30.0, back_h=20.0)
-        assert d["nut_bottom_z"] == pytest.approx(30.0)
-
-    def test_nut_bottom_z_independent_of_nut_height(self):
-        """Nut bottom position doesn't change with nut thickness."""
+    def test_nut_bottom_z_varies_with_nut_height(self):
+        """Nut bottom Z depends on nut thickness (deeper pocket for thicker nut)."""
         d1 = self._call(front_h=30.0, nut_height=5.0)
         d2 = self._call(front_h=30.0, nut_height=12.0)
-        assert d1["nut_bottom_z"] == pytest.approx(d2["nut_bottom_z"])
+        assert d1["nut_bottom_z"] == pytest.approx(30.0 - 5.0)
+        assert d2["nut_bottom_z"] == pytest.approx(30.0 - 12.0)
 
-    def test_threaded_end_minus_start_equals_top_piece_plus_nut(self):
-        """Total threaded length = top-piece height + nut_height."""
-        d = self._call(split_height=10.0, front_h=30.0, back_h=20.0, nut_height=8.0)
-        expected = d["top_piece_height"] + 8.0
+    def test_threaded_end_minus_start_equals_top_piece_plus_extend(self):
+        """Total threaded length = top-piece height + extend_amount."""
+        d = self._call(split_height=10.0, front_h=30.0, back_h=20.0, extend_amount=20.0)
+        expected = d["top_piece_height"] + 20.0
         assert (d["threaded_end_z"] - d["threaded_start_z"]) == pytest.approx(expected)
 
     def test_returns_dict(self):
@@ -621,46 +633,65 @@ class TestFlushSurfaceAssembly:
     """Verify the key geometric relationships for the flush-surface design.
 
     The design contract (tested here without FreeCAD):
-    * The screw post length along the axis equals t_surface (flush).
-    * Threads run from t_split to t_surface (full top-piece engagement).
+    * The screw post extends t_surface + t_stub (stub protrudes above surface).
+    * t_stub = extend_amount / nz_n.
+    * Threads run from t_split to t_surface + t_stub (full top-piece + stub).
     * The hex pocket floor is nut_height below the surface (along the axis).
-    * The clearance hole spans from t_split to the pocket floor.
-    * Nothing protrudes above the top surface.
+    * The clearance hole spans the full top piece (t_split to t_surface).
+    * Nut seated in pocket → nut top flush with prism top surface.
     """
 
     # Helpers: reproduce the axis-length math from create_trapezoid_prism_pieces
     # without importing FreeCAD.
 
+    def _nz(self, front_h, back_h, length):
+        nx, ny_n, nz_n = compute_screw_axis(front_h, back_h, length)
+        return nz_n
+
     def _t_surface(self, front_h, back_h, length):
         """Axis-length from base_pt to the top surface at the screw centre."""
         cx, cy = compute_screw_center(length)
         h_center = interpolate_height_at_y(cy, front_h, back_h, length)
-        nx, ny_n, nz_n = compute_screw_axis(front_h, back_h, length)
-        return h_center / nz_n
+        return h_center / self._nz(front_h, back_h, length)
 
     def _t_split(self, split_height, front_h, back_h, length):
-        nx, ny_n, nz_n = compute_screw_axis(front_h, back_h, length)
-        return split_height / nz_n
+        return split_height / self._nz(front_h, back_h, length)
 
-    # ── Post length is flush with the surface ─────────────────────────────
+    def _t_stub(self, extend_amount, front_h, back_h, length):
+        return extend_amount / self._nz(front_h, back_h, length)
 
-    def test_post_length_equals_t_surface(self):
-        """Post tip is exactly at the prism top surface (nothing protrudes)."""
-        for fh, bh, l, sh in [(30, 20, 50, 10), (20, 20, 60, 15), (40, 30, 80, 20)]:
+    # ── Post length extends past the surface by t_stub ────────────────────
+
+    def test_post_length_equals_t_surface_plus_stub(self):
+        """Post tip is t_surface + t_stub (stub protrudes above the surface)."""
+        for fh, bh, l, ea in [
+            (30, 20, 50, 20), (20, 20, 60, 15), (40, 30, 80, 8)
+        ]:
             t_surf = self._t_surface(fh, bh, l)
-            # New design: post_length = t_surface (flush, no stub above surface).
-            # Verify the formula used in create_trapezoid_prism_pieces.
-            post_length = t_surf
-            assert post_length == pytest.approx(t_surf)
+            t_stub = self._t_stub(ea, fh, bh, l)
+            # Verify the formula used in create_trapezoid_prism_pieces
+            post_length = t_surf + t_stub
+            assert post_length > t_surf   # stub protrudes above surface
+            assert post_length == pytest.approx(t_surf + ea / self._nz(fh, bh, l))
 
-    def test_thread_end_equals_t_surface(self):
-        """Threads end exactly at the post tip (flush with surface)."""
-        for fh, bh, l, sh in [(30, 20, 50, 10), (20, 20, 60, 15)]:
+    def test_thread_end_equals_post_tip(self):
+        """Threads end at the post tip (= t_surface + t_stub)."""
+        for fh, bh, l, sh, ea in [(30, 20, 50, 10, 20), (20, 20, 60, 15, 8)]:
             t_surf  = self._t_surface(fh, bh, l)
+            t_stub  = self._t_stub(ea, fh, bh, l)
             t_split = self._t_split(sh, fh, bh, l)
-            thread_end = t_surf         # new design: = post_length = t_surface
-            assert thread_end == pytest.approx(t_surf)
-            assert thread_end > t_split   # threads must span at least the top piece
+            thread_end = t_surf + t_stub   # threads go all the way to post tip
+            assert thread_end == pytest.approx(t_surf + t_stub)
+            assert thread_end > t_split    # threads span top piece + stub
+
+    def test_stub_larger_extend_amount_gives_longer_post(self):
+        """Larger extend_amount → longer stub → longer post."""
+        fh, bh, l = 30.0, 20.0, 50.0
+        t_surf = self._t_surface(fh, bh, l)
+        for ea_small, ea_large in [(8.0, 20.0), (15.0, 30.0)]:
+            post_small = t_surf + self._t_stub(ea_small, fh, bh, l)
+            post_large = t_surf + self._t_stub(ea_large, fh, bh, l)
+            assert post_large > post_small
 
     # ── Nut pocket sits fully within the top piece ────────────────────────
 
@@ -672,8 +703,8 @@ class TestFlushSurfaceAssembly:
             (40, 30, 80, 20, 10),   # top-piece height ≈ 15 > nut_height 10
             (25, 25, 60, 10, 8),    # flat top: top-piece height 15 > nut_height 8
         ]:
-            t_surf   = self._t_surface(fh, bh, l)
-            t_split  = self._t_split(sh, fh, bh, l)
+            t_surf         = self._t_surface(fh, bh, l)
+            t_split        = self._t_split(sh, fh, bh, l)
             t_pocket_floor = t_surf - nh
             assert t_pocket_floor > t_split, (
                 f"Pocket floor {t_pocket_floor:.3f} must be above split {t_split:.3f}"
@@ -682,56 +713,58 @@ class TestFlushSurfaceAssembly:
     def test_pocket_floor_formula(self):
         """Pocket floor = t_surface - nut_height (exactly nut_height deep)."""
         fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
-        t_surf = self._t_surface(fh, bh, l)
+        t_surf         = self._t_surface(fh, bh, l)
         t_pocket_floor = t_surf - nh
         assert t_pocket_floor == pytest.approx(t_surf - nh)
 
-    def test_clearance_hole_ends_at_pocket_floor(self):
-        """Clearance hole goes from t_split to t_pocket_floor (not to surface)."""
-        fh, bh, l, sh, nh = 30.0, 20.0, 50.0, 10.0, 8.0
+    def test_clearance_hole_spans_full_top_piece(self):
+        """Clearance hole spans from t_split to t_surface (full top piece)."""
+        fh, bh, l, sh = 30.0, 20.0, 50.0, 10.0
+        t_surf  = self._t_surface(fh, bh, l)
+        t_split = self._t_split(sh, fh, bh, l)
+        # hole: start = t_split - 1 (margin), length = (t_surface - t_split) + 2
+        hole_length = (t_surf - t_split) + 2.0
+        hole_end    = (t_split - 1.0) + hole_length
+        expected_end = t_surf + 1.0   # reaches past surface
+        assert hole_end == pytest.approx(expected_end)   # flush-past-surface check
+        assert hole_length > 0.0
+
+    # ── Nut is seated in pocket → top face flush with surface ────────────
+
+    def test_nut_top_flush_when_seated_in_pocket(self):
+        """When nut bottom = pocket floor, nut top = t_surface (flush)."""
+        fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
+        t_surf         = self._t_surface(fh, bh, l)
+        nut_bottom_t   = t_surf - nh    # pocket floor
+        nut_top_t      = nut_bottom_t + nh
+        assert nut_top_t == pytest.approx(t_surf)   # flush with prism top
+
+    def test_stub_protrudes_above_nut_top(self):
+        """Post tip is above the nut top (flush surface) by t_stub."""
+        fh, bh, l, nh, ea = 30.0, 20.0, 50.0, 8.0, 20.0
         t_surf   = self._t_surface(fh, bh, l)
-        t_split  = self._t_split(sh, fh, bh, l)
-        t_pocket = t_surf - nh
-        hole_length = max(2.0, (t_pocket - t_split) + 2.0)
-        # Hole ends BELOW the pocket floor (does not reach the surface)
-        hole_end = t_split - 1.0 + hole_length   # start = t_split - 1 (margin)
-        assert hole_end <= t_pocket + 2.0 + 1e-9   # within 2 mm margin of floor
-        assert t_pocket < t_surf   # pocket floor is below the surface
-
-    # ── Nut is below the surface ──────────────────────────────────────────
-
-    def test_nut_top_is_flush_with_surface(self):
-        """Nut top (entry_pt) is at t_surface — flush with prism top."""
-        fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
-        t_surf = self._t_surface(fh, bh, l)
-        # Nut bottom = t_surf - nut_height; nut top = t_surf (flush)
-        nut_top_t    = t_surf
-        nut_bottom_t = t_surf - nh
-        assert nut_top_t    == pytest.approx(t_surf)
-        assert nut_bottom_t == pytest.approx(t_surf - nh)
-        assert nut_top_t    >  nut_bottom_t
-
-    def test_no_protrusion_above_surface(self):
-        """Post tip and nut top are both at t_surface — nothing above surface."""
-        fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
-        t_surf       = self._t_surface(fh, bh, l)
-        post_length  = t_surf       # flush design
-        nut_top_t    = t_surf       # flush design
-        assert post_length  == pytest.approx(t_surf)
-        assert nut_top_t    == pytest.approx(t_surf)
+        t_stub   = self._t_stub(ea, fh, bh, l)
+        post_tip = t_surf + t_stub
+        nut_top  = t_surf             # flush when seated
+        assert post_tip > nut_top
+        assert post_tip == pytest.approx(t_surf + t_stub)
 
     # ── Equal-height prism (vertical axis, simpler case) ─────────────────
 
     def test_vertical_axis_flat_prism(self):
         """With equal front/back heights the axis is vertical and geometry is exact."""
         fh = bh = 25.0
-        l, sh, nh = 50.0, 10.0, 8.0
-        t_surf        = self._t_surface(fh, bh, l)
-        t_split       = self._t_split(sh, fh, bh, l)
+        l, sh, nh, ea = 50.0, 10.0, 8.0, 20.0
+        t_surf         = self._t_surface(fh, bh, l)
+        t_split        = self._t_split(sh, fh, bh, l)
+        t_stub         = self._t_stub(ea, fh, bh, l)
         t_pocket_floor = t_surf - nh
-        # For a flat top, nz = 1 so t_surface == h_center == fh
-        assert t_surf         == pytest.approx(fh)
-        assert t_split        == pytest.approx(sh)
-        assert t_pocket_floor == pytest.approx(fh - nh)
-        assert t_pocket_floor > t_split
+        post_length    = t_surf + t_stub
+        # For a flat top, nz = 1 so all axis-lengths equal their Z values
+        assert t_surf          == pytest.approx(fh)
+        assert t_split         == pytest.approx(sh)
+        assert t_stub          == pytest.approx(ea)
+        assert t_pocket_floor  == pytest.approx(fh - nh)
+        assert post_length     == pytest.approx(fh + ea)
+        assert t_pocket_floor  > t_split
 
