@@ -622,15 +622,16 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
         self.screw_check    = QtWidgets.QCheckBox("Add screw and nut")
         self.screw_check.setChecked(True)
 
-        self.screw_r_spin   = _spin(0.5, 100.0,   6.0, dec=2)
-        self.extend_spin    = _spin(0.5, 5000.0,  20.0)
-        self.nut_r_spin     = _spin(1.0, 200.0,   10.0, dec=2)
-        self.nut_h_spin     = _spin(0.5, 200.0,    8.0)
-        self.pitch_spin     = _spin(0.1,  20.0,    3.0, dec=2)
+        self.screw_r_spin       = _spin(0.5, 100.0,   6.0, dec=2)
+        self.extend_spin        = _spin(0.5, 5000.0,  20.0)
+        self.nut_r_spin         = _spin(1.0, 200.0,   10.0, dec=2)
+        self.nut_h_spin         = _spin(0.5, 200.0,    8.0)
+        self.pitch_spin         = _spin(0.1,  20.0,    3.0, dec=2)
+        self.pocket_depth_spin  = _spin(0.0, 200.0,    8.0)
 
         # Enable/disable screw widgets when checkbox is toggled
         for w in (self.screw_r_spin, self.extend_spin, self.nut_r_spin,
-                  self.nut_h_spin, self.pitch_spin):
+                  self.nut_h_spin, self.pitch_spin, self.pocket_depth_spin):
             w.setEnabled(self.screw_check.isChecked())
 
         self.screw_check.toggled.connect(self.screw_r_spin.setEnabled)
@@ -638,6 +639,7 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
         self.screw_check.toggled.connect(self.nut_r_spin.setEnabled)
         self.screw_check.toggled.connect(self.nut_h_spin.setEnabled)
         self.screw_check.toggled.connect(self.pitch_spin.setEnabled)
+        self.screw_check.toggled.connect(self.pocket_depth_spin.setEnabled)
 
         # ── Layout ──────────────────────────────────────────────────────
         form = QtWidgets.QFormLayout()
@@ -663,6 +665,8 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
         screw_grid.addWidget(self.nut_h_spin,                           1, 3)
         screw_grid.addWidget(QtWidgets.QLabel("Thread pitch:"),         2, 0)
         screw_grid.addWidget(self.pitch_spin,                           2, 1)
+        screw_grid.addWidget(QtWidgets.QLabel("Pocket depth:"),         2, 2)
+        screw_grid.addWidget(self.pocket_depth_spin,                    2, 3)
         form.addRow("Screw / nut:", screw_grid)
 
         info = QtWidgets.QLabel(
@@ -674,9 +678,12 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
             "the prism top surface (mm). Thread the nut onto the stub from "
             "above and tighten until the nut top is flush with the surface. "
             "<b>Nut flat radius</b>: flat-to-centre apothem of the hex nut. "
-            "<b>Nut height</b>: thickness of the nut; the top piece has a "
-            "matching hex pocket so the nut sits flush when fully tightened. "
-            "The screw axis is automatically perpendicular to the top face. "
+            "<b>Nut height</b>: thickness of the nut. "
+            "<b>Pocket depth</b>: depth of the circular recess cut into the "
+            "top surface for the nut (mm). The pocket is round so the nut "
+            "can be rotated into position. "
+            "Equal to Nut height (default) → nut top is flush when tightened. "
+            "Zero → no pocket, nut bottom sits at the surface. "
             "<b>Thread pitch</b>: axial distance between thread crests (mm); "
             "3 mm is recommended for FDM printing. "
             "The nut bore has matching internal threads.</i>"
@@ -715,6 +722,7 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
             nut_radius=self.nut_r_spin.value(),
             nut_height=self.nut_h_spin.value(),
             thread_pitch=self.pitch_spin.value(),
+            pocket_depth=self.pocket_depth_spin.value(),
         )
         if errors:
             QtWidgets.QMessageBox.warning(
@@ -741,4 +749,5 @@ class TrapezoidPrismDialog(QtWidgets.QDialog):
             "nut_flat_radius": self.nut_r_spin.value(),
             "nut_height":     self.nut_h_spin.value(),
             "thread_pitch":   self.pitch_spin.value(),
+            "pocket_depth":   self.pocket_depth_spin.value(),
         }

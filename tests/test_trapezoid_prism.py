@@ -162,6 +162,26 @@ class TestValidateTrapezoidPrismParams:
         errors = validate_trapezoid_prism_params(**self._valid(thread_pitch=0.0))
         assert any("thread_pitch" in e for e in errors)
 
+    def test_pocket_depth_negative_invalid(self):
+        """Negative pocket_depth is invalid."""
+        errors = validate_trapezoid_prism_params(**self._valid(pocket_depth=-1.0))
+        assert any("pocket_depth" in e for e in errors)
+
+    def test_pocket_depth_zero_valid(self):
+        """pocket_depth = 0 is valid (no pocket cut, nut bottom at surface)."""
+        errors = validate_trapezoid_prism_params(**self._valid(pocket_depth=0.0))
+        assert not any("pocket_depth" in e for e in errors)
+
+    def test_pocket_depth_positive_valid(self):
+        """Positive pocket_depth is valid."""
+        errors = validate_trapezoid_prism_params(**self._valid(pocket_depth=5.0))
+        assert not any("pocket_depth" in e for e in errors)
+
+    def test_pocket_depth_none_valid(self):
+        """pocket_depth = None (default to nut_height) is valid."""
+        errors = validate_trapezoid_prism_params(**self._valid(pocket_depth=None))
+        assert not any("pocket_depth" in e for e in errors)
+
     def test_multiple_errors(self):
         errors = validate_trapezoid_prism_params(
             front_w=-1.0, front_h=0.0, back_w=0.0, back_h=-5.0,
@@ -636,9 +656,10 @@ class TestFlushSurfaceAssembly:
     * The screw post extends t_surface + t_stub (stub protrudes above surface).
     * t_stub = extend_amount / nz_n.
     * Threads run from t_split to t_surface + t_stub (full top-piece + stub).
-    * The hex pocket floor is nut_height below the surface (along the axis).
+    * The circular pocket floor is pocket_depth below the surface (along the axis).
+    * pocket_depth defaults to nut_height (fully recessed); 0 = no pocket.
     * The clearance hole spans the full top piece (t_split to t_surface).
-    * Nut seated in pocket → nut top flush with prism top surface.
+    * Nut seated in pocket with pocket_depth=nut_height → nut top flush with surface.
     """
 
     # Helpers: reproduce the axis-length math from create_trapezoid_prism_pieces
@@ -696,7 +717,7 @@ class TestFlushSurfaceAssembly:
     # ── Nut pocket sits fully within the top piece ────────────────────────
 
     def test_pocket_floor_above_split(self):
-        """Hex pocket floor must be above the split plane so it stays in the top piece."""
+        """Circular pocket floor must be above the split plane (stays in the top piece)."""
         # Combinations where top_piece_height > nut_height (valid)
         for fh, bh, l, sh, nh in [
             (30, 20, 50, 10, 8),    # top-piece height ≈ 15 > nut_height 8
@@ -705,17 +726,20 @@ class TestFlushSurfaceAssembly:
         ]:
             t_surf         = self._t_surface(fh, bh, l)
             t_split        = self._t_split(sh, fh, bh, l)
+            # Default pocket_depth = nut_height (fully recessed)
             t_pocket_floor = t_surf - nh
             assert t_pocket_floor > t_split, (
                 f"Pocket floor {t_pocket_floor:.3f} must be above split {t_split:.3f}"
             )
 
     def test_pocket_floor_formula(self):
-        """Pocket floor = t_surface - nut_height (exactly nut_height deep)."""
+        """Pocket floor = t_surface - pocket_depth."""
         fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
-        t_surf         = self._t_surface(fh, bh, l)
-        t_pocket_floor = t_surf - nh
-        assert t_pocket_floor == pytest.approx(t_surf - nh)
+        t_surf = self._t_surface(fh, bh, l)
+        # Default: pocket_depth = nut_height
+        for pocket_depth in [nh, nh / 2, 0.0]:
+            t_pocket_floor = t_surf - pocket_depth
+            assert t_pocket_floor == pytest.approx(t_surf - pocket_depth)
 
     def test_clearance_hole_spans_full_top_piece(self):
         """Clearance hole spans from t_split to t_surface (full top piece)."""
@@ -731,13 +755,34 @@ class TestFlushSurfaceAssembly:
 
     # ── Nut is seated in pocket → top face flush with surface ────────────
 
-    def test_nut_top_flush_when_seated_in_pocket(self):
-        """When nut bottom = pocket floor, nut top = t_surface (flush)."""
+    def test_nut_top_flush_when_pocket_depth_equals_nut_height(self):
+        """When pocket_depth = nut_height (default): nut top = t_surface (flush)."""
         fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
-        t_surf         = self._t_surface(fh, bh, l)
-        nut_bottom_t   = t_surf - nh    # pocket floor
-        nut_top_t      = nut_bottom_t + nh
+        t_surf       = self._t_surface(fh, bh, l)
+        pocket_depth = nh    # default: fully recessed
+        nut_bottom_t = t_surf - pocket_depth    # pocket floor
+        nut_top_t    = nut_bottom_t + nh
         assert nut_top_t == pytest.approx(t_surf)   # flush with prism top
+
+    def test_zero_pocket_depth_nut_bottom_at_surface(self):
+        """When pocket_depth = 0: nut bottom is at t_surface (nut sits on surface)."""
+        fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
+        t_surf       = self._t_surface(fh, bh, l)
+        pocket_depth = 0.0    # no pocket
+        nut_bottom_t = t_surf - pocket_depth
+        nut_top_t    = nut_bottom_t + nh
+        assert nut_bottom_t == pytest.approx(t_surf)      # bottom at surface
+        assert nut_top_t    == pytest.approx(t_surf + nh) # top above surface
+
+    def test_configurable_pocket_depth(self):
+        """Pocket depth between 0 and nut_height: nut protrudes (nut_height - pocket_depth) above surface."""
+        fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
+        t_surf = self._t_surface(fh, bh, l)
+        for pocket_depth in [0.0, nh / 2, nh]:
+            nut_bottom_t = t_surf - pocket_depth
+            nut_top_t    = nut_bottom_t + nh
+            protrusion   = nut_top_t - t_surf      # positive = above surface
+            assert protrusion == pytest.approx(nh - pocket_depth)
 
     def test_stub_protrudes_above_nut_top(self):
         """Post tip is above the nut top (flush surface) by t_stub."""
@@ -745,7 +790,7 @@ class TestFlushSurfaceAssembly:
         t_surf   = self._t_surface(fh, bh, l)
         t_stub   = self._t_stub(ea, fh, bh, l)
         post_tip = t_surf + t_stub
-        nut_top  = t_surf             # flush when seated
+        nut_top  = t_surf             # flush when seated (pocket_depth = nut_height)
         assert post_tip > nut_top
         assert post_tip == pytest.approx(t_surf + t_stub)
 
@@ -754,17 +799,17 @@ class TestFlushSurfaceAssembly:
     def test_vertical_axis_flat_prism(self):
         """With equal front/back heights the axis is vertical and geometry is exact."""
         fh = bh = 25.0
-        l, sh, nh, ea = 50.0, 10.0, 8.0, 20.0
+        l, sh, nh, ea, pd = 50.0, 10.0, 8.0, 20.0, 8.0  # pd = pocket_depth default
         t_surf         = self._t_surface(fh, bh, l)
         t_split        = self._t_split(sh, fh, bh, l)
         t_stub         = self._t_stub(ea, fh, bh, l)
-        t_pocket_floor = t_surf - nh
+        t_pocket_floor = t_surf - pd
         post_length    = t_surf + t_stub
         # For a flat top, nz = 1 so all axis-lengths equal their Z values
         assert t_surf          == pytest.approx(fh)
         assert t_split         == pytest.approx(sh)
         assert t_stub          == pytest.approx(ea)
-        assert t_pocket_floor  == pytest.approx(fh - nh)
+        assert t_pocket_floor  == pytest.approx(fh - pd)
         assert post_length     == pytest.approx(fh + ea)
         assert t_pocket_floor  > t_split
 

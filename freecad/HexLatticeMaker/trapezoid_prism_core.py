@@ -52,17 +52,19 @@ When *add_screw* is True an integral screw post is added:
 
   1. A smooth **clearance hole** (radius = shaft radius + clearance) from the
      split plane through the full height of the top piece.
-  2. A hexagonal **nut pocket** recessed ``nut_height`` mm downward from the
-     top face.  The nut drops into this pocket from above when assembling.
+  2. A **circular pocket** recessed ``pocket_depth`` mm downward from the top
+     face.  The pocket radius is large enough for the hex nut to rotate freely
+     inside (circumradius + clearance).  ``pocket_depth`` is configurable from
+     zero (no pocket — nut bottom sits at the surface) up to ``nut_height``
+     (nut fully recessed, nut top flush with the surface).
 
-* The **nut** is a separate piece with **matching internal thread grooves** so
-  it can be threaded onto the screw post.  The user threads the nut onto the
-  stub that protrudes above the surface, then tightens it downward.  The nut
-  is fully tightened when its **top face is flush with the prism's top
-  surface** (i.e., the nut is fully seated in the hex pocket).  The assembled
-  result has a completely flush top surface.  ``extend_amount`` controls how
-  long the threaded stub above the surface is, and therefore how much range of
-  motion the nut has.
+* The **nut** is a separate hexagonal piece with **matching internal thread
+  grooves** so it can be threaded onto the screw post.  The user threads the
+  nut onto the stub that protrudes above the surface, then rotates it into the
+  circular pocket and tightens it downward.  When ``pocket_depth = nut_height``
+  the nut is fully seated and its top face is flush with the prism's top
+  surface.  ``extend_amount`` controls how long the threaded stub above the
+  surface is, and therefore how much range of motion the nut has.
 
 All dimensions are in millimetres.
 """
@@ -104,6 +106,7 @@ def validate_trapezoid_prism_params(
     nut_radius: float = 10.0,
     nut_height: float = 8.0,
     thread_pitch: float = DEFAULT_THREAD_PITCH,
+    pocket_depth: float = None,
 ) -> list:
     """Validate all parameters and return a (possibly empty) list of error strings.
 
@@ -119,6 +122,9 @@ def validate_trapezoid_prism_params(
     nut_radius       : outer (flat-to-flat) hex radius of the nut (mm)
     nut_height       : height of the nut (mm)
     thread_pitch     : thread pitch (mm)
+    pocket_depth     : depth of the circular nut pocket in the top piece (mm);
+                       None → defaults to nut_height; 0 = no pocket (nut bottom
+                       at surface); values between 0 and nut_height are valid.
 
     Returns
     -------
@@ -169,6 +175,8 @@ def validate_trapezoid_prism_params(
             errors.append("extend_amount must be positive")
         if thread_pitch <= 0.0:
             errors.append("thread_pitch must be positive")
+        if pocket_depth is not None and pocket_depth < 0.0:
+            errors.append("pocket_depth must be >= 0 (0 = no pocket, nut sits above surface)")
 
     return errors
 
@@ -829,6 +837,7 @@ def create_trapezoid_prism_pieces(
     thread_pitch: float = DEFAULT_THREAD_PITCH,
     thread_depth_ratio: float = DEFAULT_THREAD_DEPTH_RATIO,
     clearance: float = DEFAULT_SCREW_CLEARANCE,
+    pocket_depth: float = None,
 ) -> list:
     """Create all pieces for a split trapezoid prism with optional screw assembly.
 
@@ -848,14 +857,18 @@ def create_trapezoid_prism_pieces(
         Upper half of the prism (Z = split_height … prism top).  When
         *add_screw* is True the top piece has two cuts along the screw axis:
         a smooth clearance hole from the split plane through the full height
-        of the top piece, and a hexagonal nut pocket recessed ``nut_height``
-        mm downward from the top surface.
+        of the top piece, and a **circular** nut pocket recessed
+        ``pocket_depth`` mm downward from the top surface.  The pocket radius
+        (circumradius of the hex nut + clearance) is large enough for the nut
+        to be rotated into position.  When ``pocket_depth = 0`` no pocket is
+        cut and the nut rests on top of the surface.
 
     ``TP_Nut`` *(only when add_screw is True)*
         Hexagonal nut with a threaded bore.  The nut is threaded onto the stub
-        that protrudes ``extend_amount`` mm above the prism surface and then
-        tightened downward.  When fully seated (nut top flush with the prism
-        surface) the nut rests in the hex pocket.
+        that protrudes ``extend_amount`` mm above the prism surface, then
+        rotated into the circular pocket and tightened downward.  When
+        ``pocket_depth = nut_height`` the nut is fully seated and its top face
+        is flush with the prism's top surface.
 
     Parameters
     ----------
@@ -872,6 +885,9 @@ def create_trapezoid_prism_pieces(
     thread_pitch       : thread pitch (mm)
     thread_depth_ratio : thread depth as fraction of pitch
     clearance          : radial clearance for screw hole (mm)
+    pocket_depth       : depth of the circular nut pocket cut into the top
+                         piece (mm); None → defaults to nut_height (fully
+                         recessed); 0 = no pocket cut (nut sits above surface)
 
     Returns
     -------
@@ -936,7 +952,12 @@ def create_trapezoid_prism_pieces(
         t_split = split_height / nz_n      # split plane
         # Stub above the surface: extend_amount (along the surface normal)
         t_stub  = extend_amount / nz_n     # axis-length of stub above surface
-        t_pocket_floor = t_surface - nut_height  # bottom of hex nut pocket
+
+        # Default pocket_depth = nut_height (fully recessed, nut top flush)
+        if pocket_depth is None:
+            pocket_depth = float(nut_height)
+        else:
+            pocket_depth = float(pocket_depth)
 
         # Post extends from base through the surface and further by t_stub.
         # Threads run from the split plane all the way to the post tip.
@@ -959,23 +980,28 @@ def create_trapezoid_prism_pieces(
 
         # ── Clearance hole through the full top piece ─────────────────────
         # Spans from just below the split plane to just above the top surface.
-        # The hex pocket (cut separately below) handles the wider nut area.
         hole_r = compute_clearance_radius(screw_radius, clearance)
         hole_start_pt = base_pt + axis_dir * (t_split - 1.0)
         hole_length   = (t_surface - t_split) + 2.0
         hole = Part.makeCylinder(hole_r, hole_length, hole_start_pt, axis_dir)
         top_piece = top_piece.cut(hole)
 
-        # ── Hex nut pocket in the top piece (recessed from the top surface) ─
-        # The pocket runs from entry_pt downward nut_height along the axis.
-        # Add a tiny margin above entry_pt for a clean Boolean cut.
-        nut_bottom_pt = entry_pt - axis_dir * nut_height
-        hex_pocket = _make_hex_solid(
-            nut_bottom_pt, axis_dir, nut_flat_radius, nut_height + 0.5
-        )
-        top_piece = top_piece.cut(hex_pocket)
+        # ── Circular pocket in the top piece ──────────────────────────────
+        # A round pocket (radius = nut circumradius + clearance) allows the
+        # hex nut to be rotated into position — a hex pocket would jam.
+        # pocket_depth = 0 → no pocket (nut rests on surface).
+        # pocket_depth = nut_height → nut fully recessed, top flush.
+        nut_bottom_pt = entry_pt - axis_dir * pocket_depth
+        if pocket_depth > 0.0:
+            # Circumradius of the hex nut: apothem / cos(30°)
+            pocket_r = nut_flat_radius / math.cos(math.pi / 6.0) + clearance
+            # Slight overcut (+0.5 mm) above entry_pt for clean Boolean cut.
+            circular_pocket = Part.makeCylinder(
+                pocket_r, pocket_depth + 0.5, nut_bottom_pt, axis_dir
+            )
+            top_piece = top_piece.cut(circular_pocket)
 
-        # ── Nut (threaded bore, positioned at pocket = flush when tightened) ─
+        # ── Nut (threaded bore, positioned at pocket floor) ───────────────
         # bore_radius = shaft clearance (tight between thread ridges)
         bore_r = screw_radius + clearance
         nut_shape = make_nut_solid(
