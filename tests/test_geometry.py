@@ -46,6 +46,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     GreatRhombitrihexagonalTilingProvider,
     SnubHexagonalTilingProvider,
     _step_joint_z_extents,
+    screw_lug_positions,
 )
 
 import pytest
@@ -2817,3 +2818,112 @@ class TestDialogJointDepthKey:
         """joint_depth key must be present in the returned dict."""
         params = self._simulate_get_params()
         assert "joint_depth" in params
+
+
+# ===========================================================================
+# screw_lug_positions
+# ===========================================================================
+
+class TestScrewLugPositions:
+    """Tests for the pure-Python ``screw_lug_positions`` helper.
+
+    All tests are pure Python (no FreeCAD required).
+    """
+
+    # ── degenerate / trivial cases ────────────────────────────────────────
+
+    def test_empty_edge_returns_empty_list(self):
+        """edge_end <= edge_start → no positions."""
+        assert screw_lug_positions(50.0, 50.0, 10.0) == []
+        assert screw_lug_positions(60.0, 40.0, 10.0) == []
+
+    def test_zero_or_negative_spacing_returns_midpoint(self):
+        """spacing <= 0 → single lug at the midpoint of the edge."""
+        pos = screw_lug_positions(0.0, 100.0, 0.0)
+        assert len(pos) == 1
+        assert abs(pos[0] - 50.0) < 1e-9
+
+    def test_negative_spacing_returns_midpoint(self):
+        pos = screw_lug_positions(20.0, 80.0, -5.0)
+        assert len(pos) == 1
+        assert abs(pos[0] - 50.0) < 1e-9
+
+    # ── count of positions ────────────────────────────────────────────────
+
+    def test_spacing_larger_than_edge_gives_one_lug(self):
+        """Spacing > edge length → single lug at midpoint."""
+        pos = screw_lug_positions(0.0, 30.0, 50.0)
+        assert len(pos) == 1
+        assert abs(pos[0] - 15.0) < 1e-9
+
+    def test_spacing_exactly_half_edge_gives_two_lugs(self):
+        """spacing = edge_len / 2 → 2 lugs."""
+        pos = screw_lug_positions(0.0, 100.0, 50.0)
+        assert len(pos) == 2
+
+    def test_spacing_gives_correct_count(self):
+        """3 lugs for spacing=30 on 100 mm edge (floor(100/30)=3)."""
+        pos = screw_lug_positions(0.0, 100.0, 30.0)
+        assert len(pos) == 3
+
+    # ── positions are sorted and within bounds ────────────────────────────
+
+    def test_positions_are_sorted(self):
+        pos = screw_lug_positions(0.0, 200.0, 40.0)
+        assert pos == sorted(pos)
+
+    def test_all_positions_within_edge(self):
+        start, end = 10.0, 190.0
+        for spacing in (20.0, 35.0, 50.0, 80.0):
+            for p in screw_lug_positions(start, end, spacing):
+                assert start - 1e-9 <= p <= end + 1e-9, (
+                    f"position {p} outside [{start}, {end}] for spacing={spacing}"
+                )
+
+    # ── centring property ─────────────────────────────────────────────────
+
+    def test_single_lug_always_at_midpoint_regardless_of_spacing(self):
+        """Whenever only one lug is produced it should be at the midpoint."""
+        for spacing in (0.0, 999.0, 1e6):
+            pos = screw_lug_positions(20.0, 80.0, spacing)
+            if len(pos) == 1:
+                assert abs(pos[0] - 50.0) < 1e-9
+
+    def test_two_lugs_symmetric_about_midpoint(self):
+        """Two lugs must be symmetric about the edge midpoint."""
+        pos = screw_lug_positions(0.0, 100.0, 50.0)
+        assert len(pos) == 2
+        mid = 50.0
+        assert abs(pos[0] + pos[1] - 2 * mid) < 1e-9
+
+    def test_three_lugs_symmetric_about_midpoint(self):
+        pos = screw_lug_positions(0.0, 90.0, 30.0)
+        assert len(pos) == 3
+        mid = 45.0
+        assert abs(pos[0] + pos[2] - 2 * mid) < 1e-9
+        assert abs(pos[1] - mid) < 1e-9
+
+    # ── spacing between adjacent positions ────────────────────────────────
+
+    def test_adjacent_lugs_spaced_by_given_spacing(self):
+        """Consecutive lug centres must be exactly `spacing` apart."""
+        spacing = 25.0
+        pos = screw_lug_positions(0.0, 200.0, spacing)
+        for a, b in zip(pos[:-1], pos[1:]):
+            assert abs(b - a - spacing) < 1e-9
+
+    def test_spacing_respected_for_non_zero_start(self):
+        """Spacing invariant holds for edges not starting at zero."""
+        spacing = 20.0
+        pos = screw_lug_positions(15.0, 115.0, spacing)
+        for a, b in zip(pos[:-1], pos[1:]):
+            assert abs(b - a - spacing) < 1e-9
+
+    # ── edge cases ────────────────────────────────────────────────────────
+
+    def test_returns_list_type(self):
+        assert isinstance(screw_lug_positions(0.0, 100.0, 25.0), list)
+
+    def test_all_elements_are_floats(self):
+        for p in screw_lug_positions(0.0, 100.0, 30.0):
+            assert isinstance(p, float)

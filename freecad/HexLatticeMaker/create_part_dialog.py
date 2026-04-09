@@ -170,12 +170,15 @@ class HexLatticeDialog(QtWidgets.QDialog):
 class ShelfWithLegsDialog(HexLatticeDialog):
     """Modal dialog for shelf-with-legs creation parameters.
 
-    Extends :class:`HexLatticeDialog` with two additional fields:
+    Extends :class:`HexLatticeDialog` with additional fields for:
 
     * **Leg height** – total printed height of each corner leg.
     * **Leg width** – side length of the square leg cross-section.
       Must be smaller than the perimeter width so the corner holes fit
       entirely within the solid perimeter band.
+    * **Screw joints** – optional flat lugs with through-holes added to
+      all outer faces of the shelf pieces and legs, enabling a screw (or
+      heat-set insert + screw) connection at the shelf/leg interface.
     """
 
     def __init__(self, parent=None):
@@ -196,7 +199,42 @@ class ShelfWithLegsDialog(HexLatticeDialog):
         self._form.addRow("Leg height:",                 self.leg_height_spin)
         self._form.addRow("Leg width\n(cross-section):", self.leg_width_spin)
 
-        # Update the shared info label text (avoids any duplicate-widget issues)
+        # ── Screw joints ───────────────────────────────────────────────
+        self.screw_joint_check = QtWidgets.QCheckBox("Add screw-joint lugs")
+        self.screw_joint_check.setChecked(False)
+
+        self.screw_joint_thickness_spin = _spin(1.0, 20.0, 3.0, dec=2)
+        self.screw_joint_spacing_spin   = _spin(0.0, 5000.0, 0.0)
+        self.screw_joint_spacing_spin.setSpecialValueText("One per edge (0 = midpoint only)")
+        self.screw_hole_diameter_spin   = _spin(1.0, 20.0, 3.5, dec=2)
+
+        # Disable spinners until checkbox is ticked
+        for w in (self.screw_joint_thickness_spin,
+                  self.screw_joint_spacing_spin,
+                  self.screw_hole_diameter_spin):
+            w.setEnabled(False)
+
+        self.screw_joint_check.toggled.connect(
+            self.screw_joint_thickness_spin.setEnabled)
+        self.screw_joint_check.toggled.connect(
+            self.screw_joint_spacing_spin.setEnabled)
+        self.screw_joint_check.toggled.connect(
+            self.screw_hole_diameter_spin.setEnabled)
+
+        # Lay out the screw-joint section as a sub-grid so controls are
+        # visually grouped under the checkbox.
+        screw_grid = QtWidgets.QGridLayout()
+        screw_grid.addWidget(self.screw_joint_check, 0, 0, 1, 4)
+        screw_grid.addWidget(QtWidgets.QLabel("  Lug thickness:"),   1, 0)
+        screw_grid.addWidget(self.screw_joint_thickness_spin,        1, 1)
+        screw_grid.addWidget(QtWidgets.QLabel("  Hole diameter:"),   1, 2)
+        screw_grid.addWidget(self.screw_hole_diameter_spin,          1, 3)
+        screw_grid.addWidget(QtWidgets.QLabel("  Lug spacing\n  (0 = one per edge):"), 2, 0)
+        screw_grid.addWidget(self.screw_joint_spacing_spin,          2, 1)
+
+        self._form.addRow("Screw joints:", screw_grid)
+
+        # Update the shared info label text
         self._info_label.setText(
             "<i>Parts wider/longer than <b>Max piece size</b> are automatically "
             "sliced into interlocking finger-joint pieces for 3-D printing. "
@@ -210,16 +248,29 @@ class ShelfWithLegsDialog(HexLatticeDialog):
             "<b>Support bar spacing</b> adds internal solid ribs every N mm (0 = none). "
             "<b>Leg width</b> must be smaller than <b>Perimeter width</b> so "
             "that the corner holes fit within the solid perimeter band. "
-            "The top of each leg is a peg that inserts into a blind hole in "
-            "the shelf; the leg body rests below the shelf.</i>"
+            "<b>Screw joints</b>: when enabled, flat rectangular lugs with a "
+            "centred vertical through-hole are added to all outer faces of "
+            "each shelf piece and each leg at the shelf/leg interface (world "
+            "z = 0). Place a heat-set insert in one lug and thread a screw "
+            "through the other to create a strong mechanical connection. "
+            "<b>Lug thickness</b> sets the Z height of each lug. "
+            "<b>Hole diameter</b> sets the screw/insert hole size (same on "
+            "both the shelf lug and the leg lug). "
+            "<b>Lug spacing</b> controls how many lugs appear along each outer "
+            "shelf edge: 0 places one lug at the midpoint; a positive value "
+            "places lugs at that centre-to-centre interval.</i>"
         )
 
     # ------------------------------------------------------------------
     def get_params(self) -> dict:
-        """Return dialog values including leg dimensions."""
+        """Return dialog values including leg and screw-joint parameters."""
         params = super().get_params()
-        params["leg_height"] = self.leg_height_spin.value()
-        params["leg_width"]  = self.leg_width_spin.value()
+        params["leg_height"]            = self.leg_height_spin.value()
+        params["leg_width"]             = self.leg_width_spin.value()
+        params["screw_joint"]           = self.screw_joint_check.isChecked()
+        params["screw_joint_thickness"] = self.screw_joint_thickness_spin.value()
+        params["screw_joint_spacing"]   = self.screw_joint_spacing_spin.value()
+        params["screw_hole_diameter"]   = self.screw_hole_diameter_spin.value()
         return params
 
 
