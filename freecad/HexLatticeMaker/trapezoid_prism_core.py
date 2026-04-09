@@ -993,7 +993,9 @@ def create_trapezoid_prism_pieces(
         # pocket_depth = nut_height → nut fully recessed, top flush.
         nut_bottom_pt = entry_pt - axis_dir * pocket_depth
         if pocket_depth > 0.0:
-            # Circumradius of the hex nut: apothem / cos(30°)
+            # pocket_r = circumradius of hex nut + clearance.
+            # nut_flat_radius is the apothem (flat-to-centre inradius); the
+            # circumradius (vertex-to-centre) = apothem / cos(30°).
             pocket_r = nut_flat_radius / math.cos(math.pi / 6.0) + clearance
             # Slight overcut (+0.5 mm) above entry_pt for clean Boolean cut.
             circular_pocket = Part.makeCylinder(

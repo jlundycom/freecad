@@ -775,7 +775,7 @@ class TestFlushSurfaceAssembly:
         assert nut_top_t    == pytest.approx(t_surf + nh) # top above surface
 
     def test_configurable_pocket_depth(self):
-        """Pocket depth between 0 and nut_height: nut protrudes (nut_height - pocket_depth) above surface."""
+        """Pocket depth from 0 to nut_height (inclusive): nut protrudes (nut_height - pocket_depth) above surface."""
         fh, bh, l, nh = 30.0, 20.0, 50.0, 8.0
         t_surf = self._t_surface(fh, bh, l)
         for pocket_depth in [0.0, nh / 2, nh]:
