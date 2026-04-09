@@ -205,7 +205,7 @@ class ShelfWithLegsDialog(HexLatticeDialog):
 
         self.screw_joint_thickness_spin = _spin(1.0, 20.0, 3.0, dec=2)
         self.screw_joint_spacing_spin   = _spin(0.0, 5000.0, 0.0)
-        self.screw_joint_spacing_spin.setSpecialValueText("One per edge (0 = midpoint only)")
+        self.screw_joint_spacing_spin.setSpecialValueText("Single lug at midpoint")
         self.screw_hole_diameter_spin   = _spin(1.0, 20.0, 3.5, dec=2)
 
         # Disable spinners until checkbox is ticked

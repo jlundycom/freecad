@@ -2311,7 +2311,10 @@ def make_leg(
     # ------------------------------------------------------------------
     if screw_joint and screw_hole_diameter > _GEOM_EPS:
         hole_r  = screw_hole_diameter * 0.5
-        arm     = max(2.5 * screw_hole_diameter, 1.5 * screw_joint_thickness)
+        arm     = max(
+            _LUG_HOLE_DIAMETER_RATIO * screw_hole_diameter,
+            _LUG_THICKNESS_RATIO     * screw_joint_thickness,
+        )
         half    = arm * 0.5
         cx      = leg_width * 0.5
         cy      = leg_width * 0.5
@@ -2356,6 +2359,12 @@ def make_leg(
 # Screw-joint lug helpers
 # ---------------------------------------------------------------------------
 
+_LUG_HOLE_DIAMETER_RATIO = 2.5   # lug arm = max(this × hole_diameter, …)
+_LUG_THICKNESS_RATIO    = 1.5   # lug arm = max(…, this × tab_thickness)
+_LUG_HOLE_FIT_FACTOR    = 2.0   # min lug width = hole_diameter × this factor
+_LUG_MAX_COUNT          = 1000  # safety cap on lugs per edge
+
+
 def screw_lug_positions(
     edge_start: float,
     edge_end: float,
@@ -2380,7 +2389,7 @@ def screw_lug_positions(
         return []
     if spacing <= _GEOM_EPS:
         return [(edge_start + edge_end) * 0.5]
-    n_lugs = max(1, int(math.floor(edge_len / spacing)))
+    n_lugs = min(_LUG_MAX_COUNT, max(1, int(math.floor(edge_len / spacing))))
     total_span = (n_lugs - 1) * spacing if n_lugs > 1 else 0.0
     start = edge_start + (edge_len - total_span) * 0.5
     return [start + i * spacing for i in range(n_lugs)]
@@ -2457,7 +2466,8 @@ def _shelf_piece_screw_lugs(
     """
     lugs = []
     half_arm = arm * 0.5
-    min_w = hole_r * 2.0 + _GEOM_EPS  # minimum lug width to fit the hole
+    # Minimum lug width to ensure the hole fits with clearance on both sides.
+    min_w = hole_r * _LUG_HOLE_FIT_FACTOR + _GEOM_EPS
 
     def _add_lugs_along_x(cx_positions, fixed_y0, fixed_y1):
         for cx in cx_positions:
@@ -2766,7 +2776,10 @@ def create_shelf_with_legs(
 
     # Pre-compute screw lug arm size (used for both shelf and leg lugs).
     if screw_joint and screw_hole_diameter > _GEOM_EPS:
-        _lug_arm = max(2.5 * screw_hole_diameter, 1.5 * screw_joint_thickness)
+        _lug_arm = max(
+            _LUG_HOLE_DIAMETER_RATIO * screw_hole_diameter,
+            _LUG_THICKNESS_RATIO     * screw_joint_thickness,
+        )
     else:
         _lug_arm = 0.0
 

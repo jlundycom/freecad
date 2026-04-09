@@ -2837,13 +2837,14 @@ class TestScrewLugPositions:
         assert screw_lug_positions(50.0, 50.0, 10.0) == []
         assert screw_lug_positions(60.0, 40.0, 10.0) == []
 
-    def test_zero_or_negative_spacing_returns_midpoint(self):
-        """spacing <= 0 → single lug at the midpoint of the edge."""
+    def test_zero_spacing_returns_midpoint(self):
+        """spacing == 0 → single lug at the midpoint of the edge."""
         pos = screw_lug_positions(0.0, 100.0, 0.0)
         assert len(pos) == 1
         assert abs(pos[0] - 50.0) < 1e-9
 
     def test_negative_spacing_returns_midpoint(self):
+        """spacing < 0 is treated the same as spacing == 0 (midpoint only)."""
         pos = screw_lug_positions(20.0, 80.0, -5.0)
         assert len(pos) == 1
         assert abs(pos[0] - 50.0) < 1e-9
