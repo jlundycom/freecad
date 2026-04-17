@@ -34,6 +34,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     _x_joint_y_extents,
     LATTICE_TYPES,
     get_tiling_provider,
+    SolidTilingProvider,
     HexagonalTilingProvider,
     SquareTilingProvider,
     TriangularTilingProvider,
@@ -1029,31 +1030,37 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_eleven_entries(self):
-        assert len(LATTICE_TYPES) == 11
+    def test_lattice_types_has_twelve_entries(self):
+        assert len(LATTICE_TYPES) == 12
 
     def test_required_keys_present(self):
-        for key in ("hexagonal", "square", "triangular", "trihexagonal",
+        for key in ("solid", "hexagonal", "square", "triangular", "trihexagonal",
                     "truncated_square", "snub_square", "elongated_triangular",
                     "truncated_hexagonal", "small_rhombitrihexagonal",
                     "great_rhombitrihexagonal", "snub_hexagonal"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
+
+    def test_solid_is_first_entry(self):
+        assert list(LATTICE_TYPES.keys())[0] == "solid", (
+            "'solid' should be the first entry so it is the default in the UI"
+        )
 
     def test_all_display_names_are_strings(self):
         for key, name in LATTICE_TYPES.items():
             assert isinstance(name, str) and name, f"Bad display name for {key!r}"
 
     def test_get_tiling_provider_returns_correct_types(self):
-        assert isinstance(get_tiling_provider("hexagonal"),                 HexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("square"),                    SquareTilingProvider)
-        assert isinstance(get_tiling_provider("triangular"),                TriangularTilingProvider)
-        assert isinstance(get_tiling_provider("trihexagonal"),              TrihexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("truncated_square"),          TruncatedSquareTilingProvider)
-        assert isinstance(get_tiling_provider("snub_square"),               SnubSquareTilingProvider)
-        assert isinstance(get_tiling_provider("elongated_triangular"),      ElongatedTriangularTilingProvider)
-        assert isinstance(get_tiling_provider("truncated_hexagonal"),       TruncatedHexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("small_rhombitrihexagonal"),  SmallRhombitrihexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("great_rhombitrihexagonal"),  GreatRhombitrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("solid"),                      SolidTilingProvider)
+        assert isinstance(get_tiling_provider("hexagonal"),                  HexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("square"),                     SquareTilingProvider)
+        assert isinstance(get_tiling_provider("triangular"),                 TriangularTilingProvider)
+        assert isinstance(get_tiling_provider("trihexagonal"),               TrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_square"),           TruncatedSquareTilingProvider)
+        assert isinstance(get_tiling_provider("snub_square"),                SnubSquareTilingProvider)
+        assert isinstance(get_tiling_provider("elongated_triangular"),       ElongatedTriangularTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_hexagonal"),        TruncatedHexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("small_rhombitrihexagonal"),   SmallRhombitrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("great_rhombitrihexagonal"),   GreatRhombitrihexagonalTilingProvider)
         assert isinstance(get_tiling_provider("snub_hexagonal"),             SnubHexagonalTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
@@ -1087,6 +1094,14 @@ class TestTilingCells:
 
     def test_hexagonal_non_empty(self):
         assert len(self._cells("hexagonal")) > 0
+
+    def test_solid_returns_no_cells(self):
+        """Solid tiling has no holes — get_cells() must always return []."""
+        assert self._cells("solid") == []
+
+    def test_solid_cell_circumradius_is_zero(self):
+        p = get_tiling_provider("solid")
+        assert p.cell_circumradius(8.0) == 0.0
 
     def test_square_non_empty(self):
         assert len(self._cells("square")) > 0
@@ -2225,9 +2240,12 @@ class TestFullRegionTiling:
     def test_cells_generated_inside_perimeter_zone(self, key):
         """get_cells() with full bounds must return at least one cell whose
         centre falls within the perimeter band (within perim_w of an edge).
+        Skipped for 'solid' which intentionally produces no cells.
         """
         p = get_tiling_provider(key)
         cells = p.get_cells(0.0, self._W, 0.0, self._L, self._CELL, self._WALL)
+        if not cells:
+            pytest.skip(f"Tiling {key!r} produces no cells (solid/empty pattern)")
         perim = self._PERIM
         W, L  = self._W, self._L
 
@@ -2244,12 +2262,15 @@ class TestFullRegionTiling:
     def test_full_region_produces_more_cells_than_interior(self, key):
         """Full-bounds get_cells() must return strictly more cells than the
         interior-only call (because the perimeter zone is now included).
+        Skipped for 'solid' which intentionally produces no cells.
         """
         p = get_tiling_provider(key)
         perim = self._PERIM
         W, L  = self._W, self._L
 
         cells_full     = p.get_cells(0.0, W, 0.0, L, self._CELL, self._WALL)
+        if not cells_full:
+            pytest.skip(f"Tiling {key!r} produces no cells (solid/empty pattern)")
         cells_interior = p.get_cells(perim, W - perim, perim, L - perim,
                                      self._CELL, self._WALL)
 

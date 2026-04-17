@@ -100,8 +100,12 @@ _GEOM_EPS        = 1e-9    # geometry epsilon: threshold for discarding near-zer
 # ---------------------------------------------------------------------------
 
 #: Ordered mapping of tiling key → display name for the UI dropdown.
+#: ``"solid"`` is listed first so it is the default selection in the UI;
+#: it produces a plain flat sheet with no lattice holes, which is useful
+#: for quick shape checks before switching to a patterned tiling.
 #: See TILING_PLAN.md for the plan to add the remaining semi-regular tilings.
 LATTICE_TYPES = {
+    "solid":                       "Solid (no holes)",
     "hexagonal":              "Hexagonal (6.6.6)",
     "square":                 "Square (4.4.4.4)",
     "triangular":             "Triangular (3.3.3.3.3.3)",
@@ -180,6 +184,23 @@ class TilingProvider:
         raise NotImplementedError(
             f"{type(self).__name__} must implement get_cells()"
         )
+
+
+class SolidTilingProvider(TilingProvider):
+    """Solid (no-hole) tiling — produces a plain flat sheet.
+
+    Returns no cell descriptors, so the base body remains completely solid.
+    This is useful for quickly creating a rectangular piece without any
+    lattice pattern, and for testing slicing and joint geometry in isolation.
+    """
+
+    display_name = "Solid (no holes)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        return 0.0
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        return []
 
 
 class HexagonalTilingProvider(TilingProvider):
@@ -1146,6 +1167,7 @@ class SnubHexagonalTilingProvider(TilingProvider):
 
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
+    "solid":                         SolidTilingProvider(),
     "hexagonal":                     HexagonalTilingProvider(),
     "square":                        SquareTilingProvider(),
     "triangular":                    TriangularTilingProvider(),
@@ -1949,7 +1971,7 @@ def make_piece(
     x_cuts: list,
     y_cuts: list,
     leg_zones: list = (),
-    lattice_type: str = "hexagonal",
+    lattice_type: str = "solid",
     joint_w: float = None,
     finger_w: float = None,
     finger_spacing: float = 0.0,
@@ -1957,6 +1979,9 @@ def make_piece(
     support_width: float = None,
     joint_depth: float = None,
     joint_style: str = "step",
+    screw_joint: bool = False,
+    screw_hole_diameter: float = 3.5,
+    screw_joint_spacing: float = 0.0,
 ) -> object:  # returns Part.Shape
     """Build one interlocking piece of the lattice panel.
 
@@ -2024,6 +2049,20 @@ def make_piece(
     joint_style    : ``'step'`` (default) — alternating stepped shelf joints
                      that lock assembled pieces against vertical movement.
                      ``'taper'`` — legacy tapered box joints (draft angle in Z).
+    screw_joint    : when ``True``, vertical cylindrical through-holes are
+                     drilled in the bridge material on **each side** of every
+                     cut line.  One hole in each adjacent piece — when the
+                     pieces are assembled the two holes sit side-by-side
+                     across the joint so a screw (with a heat-set insert in
+                     one piece and a clearance hole in the other) locks them
+                     together.
+    screw_hole_diameter : diameter of each screw through-hole (mm).  The same
+                     diameter is used on both sides of every joint, so the
+                     same drill / heat-set insert size is used throughout.
+    screw_joint_spacing : centre-to-centre spacing between screw holes along
+                     each joint face (mm).  ``0`` (default) places a single
+                     hole at the midpoint of the face; a positive value places
+                     holes at that interval, centred on the face.
     """
     import FreeCAD as App
     import Part
@@ -2145,6 +2184,24 @@ def make_piece(
                                 finger_spacing=finger_spacing)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
+    # ------------------------------------------------------------------
+    # 5. Screw-joint through-holes at cut faces
+    # ------------------------------------------------------------------
+    # Each enabled cut line gets a vertical cylindrical hole drilled through
+    # the bridge material on EACH SIDE of the cut.  The two holes sit at
+    # symmetric positions about the cut (one per adjacent piece) so that
+    # when the pieces are assembled the holes are accessible from the top
+    # and a screw through both holes (with a heat-set insert in one) locks
+    # the pieces together.
+    if screw_joint and screw_hole_diameter > _GEOM_EPS:
+        body = _apply_screw_joint_holes(
+            body, x0, x1, y0, y1, height,
+            x_cuts, y_cuts,
+            joint_w,
+            screw_hole_diameter,
+            screw_joint_spacing,
+        )
+
     return body
 
 
@@ -2225,11 +2282,6 @@ def make_leg(
     leg_height: float,
     peg_depth: float,
     shelf_height: float = 0.0,
-    screw_joint: bool = False,
-    screw_joint_thickness: float = 3.0,
-    screw_hole_diameter: float = 3.5,
-    lug_x_side: int = -1,
-    lug_y_side: int = -1,
 ) -> object:  # Part.Shape
     """Return a FreeCAD Part.Shape for a single shelf leg with tenon peg.
 
@@ -2255,12 +2307,6 @@ def make_leg(
     through-pin rises through the full shelf height ending flush with the
     shelf top face (z = 0 … shelf_height in world space).
 
-    When *screw_joint* is enabled a flat rectangular lug with a centred
-    vertical through-hole is fused onto each of the two outer faces of the
-    leg (the faces that are flush with the shelf outer edges in the assembly).
-    The lug sits at the shoulder (local z = leg_height) so it aligns with the
-    matching lug on the shelf bottom face (world z = 0).
-
     Parameters
     ----------
     leg_width             : side length of the square cross-section (mm).
@@ -2269,19 +2315,6 @@ def make_leg(
                             blind hole (mm).
     shelf_height          : shelf panel height (mm).  When > 0 a cylindrical
                             through-pin is added to the leg centre.
-    screw_joint           : when ``True``, screw-joint lugs are added to the
-                            two outer faces of the leg.
-    screw_joint_thickness : height (Z) of each lug at the shoulder (mm).
-    screw_hole_diameter   : diameter of the vertical screw/heat-insert hole
-                            drilled through each lug (mm).
-    lug_x_side            : which X face carries the lug.  ``-1`` (default)
-                            → lug on the x = 0 face (extends in −X).
-                            ``+1`` → lug on the x = leg_width face (extends
-                            in +X).
-    lug_y_side            : which Y face carries the lug.  ``-1`` (default)
-                            → lug on the y = 0 face (extends in −Y).
-                            ``+1`` → lug on the y = leg_width face (extends
-                            in +Y).
     """
     import FreeCAD as App
     import Part
@@ -2304,65 +2337,14 @@ def make_leg(
         )
         body = body.fuse(pin)
 
-    # ------------------------------------------------------------------
-    # Optional screw-joint lugs on the two outer corner faces.
-    # Each lug sits at z = leg_height (the shoulder) and extends outward
-    # from the leg in the same world-space as the shelf's bottom-face lugs.
-    # ------------------------------------------------------------------
-    if screw_joint and screw_hole_diameter > _GEOM_EPS:
-        hole_r  = screw_hole_diameter * 0.5
-        arm     = max(
-            _LUG_HOLE_DIAMETER_RATIO * screw_hole_diameter,
-            _LUG_THICKNESS_RATIO     * screw_joint_thickness,
-        )
-        half    = arm * 0.5
-        cx      = leg_width * 0.5
-        cy      = leg_width * 0.5
-        lug_z0  = leg_height
-        tab_h   = screw_joint_thickness
-        lugs    = []
-
-        # X-axis outer face
-        if lug_x_side < 0:
-            lugs.append(_make_screw_lug(
-                -arm, 0.0,
-                cy - half, cy + half,
-                lug_z0, tab_h, hole_r,
-            ))
-        else:
-            lugs.append(_make_screw_lug(
-                leg_width, leg_width + arm,
-                cy - half, cy + half,
-                lug_z0, tab_h, hole_r,
-            ))
-
-        # Y-axis outer face
-        if lug_y_side < 0:
-            lugs.append(_make_screw_lug(
-                cx - half, cx + half,
-                -arm, 0.0,
-                lug_z0, tab_h, hole_r,
-            ))
-        else:
-            lugs.append(_make_screw_lug(
-                cx - half, cx + half,
-                leg_width, leg_width + arm,
-                lug_z0, tab_h, hole_r,
-            ))
-
-        body = _fuse_shapes([body] + lugs)
-
     return body
 
 
 # ---------------------------------------------------------------------------
-# Screw-joint lug helpers
+# Screw-joint hole helpers
 # ---------------------------------------------------------------------------
 
-_LUG_HOLE_DIAMETER_RATIO = 2.5   # lug arm = max(this × hole_diameter, …)
-_LUG_THICKNESS_RATIO    = 1.5   # lug arm = max(…, this × tab_thickness)
-_LUG_HOLE_FIT_FACTOR    = 2.0   # min lug width = hole_diameter × this factor
-_LUG_MAX_COUNT          = 1000  # safety cap on lugs per edge
+_SCREW_HOLE_MAX_COUNT = 1000  # safety cap on holes per cut face
 
 
 def screw_lug_positions(
@@ -2370,18 +2352,21 @@ def screw_lug_positions(
     edge_end: float,
     spacing: float,
 ) -> list:
-    """Return centre positions for screw-joint lugs evenly spaced along an edge.
+    """Return evenly-spaced centre positions along an edge.
+
+    Used to place screw-joint through-holes at regular intervals along a
+    cut face (or any linear span).
 
     Parameters
     ----------
-    edge_start, edge_end : start and end coordinates of the edge (mm).
-    spacing              : distance between lug centres (mm).  When ``<= 0``
-                           a single lug is placed at the midpoint of the edge.
+    edge_start, edge_end : start and end coordinates of the span (mm).
+    spacing              : distance between centres (mm).  When ``<= 0``
+                           a single position is placed at the midpoint.
 
     Returns
     -------
     list of float
-        Sorted centre positions within ``[edge_start, edge_end]``.
+        Sorted positions within ``[edge_start, edge_end]``.
         Returns an empty list when ``edge_end <= edge_start``.
     """
     edge_len = edge_end - edge_start
@@ -2389,131 +2374,110 @@ def screw_lug_positions(
         return []
     if spacing <= _GEOM_EPS:
         return [(edge_start + edge_end) * 0.5]
-    n_lugs = min(_LUG_MAX_COUNT, max(1, int(math.floor(edge_len / spacing))))
-    total_span = (n_lugs - 1) * spacing if n_lugs > 1 else 0.0
+    n = min(_SCREW_HOLE_MAX_COUNT, max(1, int(math.floor(edge_len / spacing))))
+    total_span = (n - 1) * spacing if n > 1 else 0.0
     start = edge_start + (edge_len - total_span) * 0.5
-    return [start + i * spacing for i in range(n_lugs)]
+    return [start + i * spacing for i in range(n)]
 
 
-def _make_screw_lug(
-    tx0: float, tx1: float,
-    ty0: float, ty1: float,
-    z0: float,
-    tab_h: float,
-    hole_r: float,
-) -> object:  # Part.Shape
-    """Return a flat screw-lug tab with a centred vertical through-hole.
+def _apply_screw_joint_holes(
+    body,
+    x0: float, x1: float,
+    y0: float, y1: float,
+    height: float,
+    x_cuts: list,
+    y_cuts: list,
+    joint_w: float,
+    hole_diam: float,
+    spacing: float,
+):
+    """Drill vertical screw-joint through-holes in the bridge material.
 
-    The lug is an axis-aligned rectangular box ``[tx0, tx1] × [ty0, ty1] ×
-    [z0, z0 + tab_h]`` with a cylindrical hole of radius *hole_r* drilled
-    along the Z axis through its XY centre.
+    For each cut line that this piece borders, a vertical cylindrical
+    through-hole of diameter *hole_diam* is drilled through the **full
+    height** of the piece at the bridge material — one hole on each side
+    of the cut.  The hole centre is placed at ``joint_w / 4`` from the cut
+    face, which puts it in the middle of the bridge half-width.
+
+    When two adjacent pieces are assembled, their respective holes sit
+    side-by-side across the joint.  A screw inserted vertically from the
+    top (or bottom) passes through one hole and is secured by a heat-set
+    insert in the other, creating a strong mechanical connection.
 
     Parameters
     ----------
-    tx0, tx1, ty0, ty1 : XY bounding box of the lug (mm).
-    z0                 : bottom Z of the lug (mm).
-    tab_h              : height (Z extent) of the lug (mm).
-    hole_r             : radius of the screw / heat-insert hole (mm).
+    body      : Part.Shape — the piece body to cut into.
+    x0 … y1  : bounds of this piece (mm).
+    height    : piece height in Z (mm) — holes run the full height.
+    x_cuts    : list of X-cut positions.
+    y_cuts    : list of Y-cut positions.
+    joint_w   : bridge width (mm).  ``joint_w / 4`` is used as the hole
+                offset from the cut face.
+    hole_diam : screw hole diameter (mm).
+    spacing   : hole spacing along the cut face (mm; 0 = midpoint only).
+
+    Returns
+    -------
+    Part.Shape — the modified body with screw holes cut.
     """
     import FreeCAD as App
     import Part
 
-    tab = Part.makeBox(
-        tx1 - tx0, ty1 - ty0, tab_h,
-        App.Vector(tx0, ty0, z0),
-    )
-    hcx = (tx0 + tx1) * 0.5
-    hcy = (ty0 + ty1) * 0.5
-    hole = Part.makeCylinder(
-        hole_r, tab_h,
-        App.Vector(hcx, hcy, z0),
-        App.Vector(0.0, 0.0, 1.0),
-    )
-    return tab.cut(hole)
+    hole_r = hole_diam * 0.5
+    # Place hole centre at joint_w/4 from the cut face (centre of bridge half)
+    offset = joint_w / 4.0
 
+    cutters = []
 
-def _shelf_piece_screw_lugs(
-    piece_x0: float, piece_x1: float,
-    piece_y0: float, piece_y1: float,
-    total_w: float, total_l: float,
-    arm: float,
-    tab_h: float,
-    hole_r: float,
-    spacing: float,
-) -> list:
-    """Return screw-lug shapes for the outer edges of one shelf piece.
+    # ── X-cuts (vertical faces at x = xc) ──────────────────────────────
+    for xc in x_cuts:
+        y_positions = screw_lug_positions(y0, y1, spacing)
 
-    Lugs are added to any edge of this piece that coincides with an outer
-    shelf boundary (``piece_x0 == 0``, ``piece_x1 == total_w``, etc.).
-    Each lug extends *arm* mm outward from the face (beyond the shelf
-    footprint), spans *arm* mm along the edge, and is *tab_h* mm tall
-    starting at z = 0 (the shelf bottom face).
+        # This piece is LEFT of this cut (right face at x = xc)
+        if abs(x1 - xc) < _GEOM_EPS:
+            for yp in y_positions:
+                cutters.append(Part.makeCylinder(
+                    hole_r, height,
+                    App.Vector(xc - offset, yp, 0.0),
+                    App.Vector(0.0, 0.0, 1.0),
+                ))
 
-    Parameters
-    ----------
-    piece_x0 … piece_y1 : bounds of this piece (mm).
-    total_w, total_l    : overall shelf dimensions (mm).
-    arm                 : lug arm length/depth (mm) — used for both the
-                          along-edge width and the outward depth.
-    tab_h               : lug height in Z (mm).
-    hole_r              : screw hole radius (mm).
-    spacing             : spacing between lug centres along the edge (mm);
-                          ``<= 0`` places a single lug at the midpoint.
+        # This piece is RIGHT of this cut (left face at x = xc)
+        if abs(x0 - xc) < _GEOM_EPS:
+            for yp in y_positions:
+                cutters.append(Part.makeCylinder(
+                    hole_r, height,
+                    App.Vector(xc + offset, yp, 0.0),
+                    App.Vector(0.0, 0.0, 1.0),
+                ))
 
-    Returns
-    -------
-    list of Part.Shape
-    """
-    lugs = []
-    half_arm = arm * 0.5
-    # Minimum lug width to ensure the hole fits with clearance on both sides.
-    min_w = hole_r * _LUG_HOLE_FIT_FACTOR + _GEOM_EPS
+    # ── Y-cuts (vertical faces at y = yc) ──────────────────────────────
+    for yc in y_cuts:
+        x_positions = screw_lug_positions(x0, x1, spacing)
 
-    def _add_lugs_along_x(cx_positions, fixed_y0, fixed_y1):
-        for cx in cx_positions:
-            tx0 = max(cx - half_arm, piece_x0)
-            tx1 = min(cx + half_arm, piece_x1)
-            if tx1 - tx0 < min_w:
-                continue
-            lugs.append(_make_screw_lug(tx0, tx1, fixed_y0, fixed_y1, 0.0, tab_h, hole_r))
+        # This piece is BELOW this cut (top face at y = yc)
+        if abs(y1 - yc) < _GEOM_EPS:
+            for xp in x_positions:
+                cutters.append(Part.makeCylinder(
+                    hole_r, height,
+                    App.Vector(xp, yc - offset, 0.0),
+                    App.Vector(0.0, 0.0, 1.0),
+                ))
 
-    def _add_lugs_along_y(cy_positions, fixed_x0, fixed_x1):
-        for cy in cy_positions:
-            ty0 = max(cy - half_arm, piece_y0)
-            ty1 = min(cy + half_arm, piece_y1)
-            if ty1 - ty0 < min_w:
-                continue
-            lugs.append(_make_screw_lug(fixed_x0, fixed_x1, ty0, ty1, 0.0, tab_h, hole_r))
+        # This piece is ABOVE this cut (bottom face at y = yc)
+        if abs(y0 - yc) < _GEOM_EPS:
+            for xp in x_positions:
+                cutters.append(Part.makeCylinder(
+                    hole_r, height,
+                    App.Vector(xp, yc + offset, 0.0),
+                    App.Vector(0.0, 0.0, 1.0),
+                ))
 
-    # Y = 0 outer face (bottom edge of shelf)
-    if piece_y0 < _GEOM_EPS:
-        _add_lugs_along_x(
-            screw_lug_positions(piece_x0, piece_x1, spacing),
-            -arm, 0.0,
-        )
+    if cutters:
+        holes_union = _fuse_shapes(cutters)
+        body = body.cut(holes_union)
 
-    # Y = total_l outer face (top edge of shelf)
-    if piece_y1 > total_l - _GEOM_EPS:
-        _add_lugs_along_x(
-            screw_lug_positions(piece_x0, piece_x1, spacing),
-            total_l, total_l + arm,
-        )
-
-    # X = 0 outer face (left edge of shelf)
-    if piece_x0 < _GEOM_EPS:
-        _add_lugs_along_y(
-            screw_lug_positions(piece_y0, piece_y1, spacing),
-            -arm, 0.0,
-        )
-
-    # X = total_w outer face (right edge of shelf)
-    if piece_x1 > total_w - _GEOM_EPS:
-        _add_lugs_along_y(
-            screw_lug_positions(piece_y0, piece_y1, spacing),
-            total_w, total_w + arm,
-        )
-
-    return lugs
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -2528,7 +2492,7 @@ def create_all_pieces(
     hex_size: float,
     wall_thickness: float = None,
     max_piece_size: float = MAX_PIECE_SIZE,
-    lattice_type: str = "hexagonal",
+    lattice_type: str = "solid",
     joint_width: float = None,
     finger_w: float = None,
     finger_spacing: float = 0.0,
@@ -2536,6 +2500,9 @@ def create_all_pieces(
     support_width: float = None,
     joint_depth: float = None,
     joint_style: str = "step",
+    screw_joint: bool = False,
+    screw_hole_diameter: float = 3.5,
+    screw_joint_spacing: float = 0.0,
 ) -> list:
     """Create all interlocking pieces for a lattice flat panel.
 
@@ -2607,6 +2574,9 @@ def create_all_pieces(
                 support_width=support_width,
                 joint_depth=joint_depth,
                 joint_style=joint_style,
+                screw_joint=screw_joint,
+                screw_hole_diameter=screw_hole_diameter,
+                screw_joint_spacing=screw_joint_spacing,
             )
             pieces.append((f"Piece_{ix}_{iy}", shape))
 
@@ -2623,7 +2593,7 @@ def create_shelf_with_legs(
     max_piece_size: float = MAX_PIECE_SIZE,
     leg_height: float = 100.0,
     leg_width: float = 20.0,
-    lattice_type: str = "hexagonal",
+    lattice_type: str = "solid",
     joint_width: float = None,
     finger_w: float = None,
     finger_spacing: float = 0.0,
@@ -2632,7 +2602,6 @@ def create_shelf_with_legs(
     joint_depth: float = None,
     joint_style: str = "step",
     screw_joint: bool = False,
-    screw_joint_thickness: float = 3.0,
     screw_joint_spacing: float = 0.0,
     screw_hole_diameter: float = 3.5,
 ) -> list:
@@ -2654,24 +2623,13 @@ def create_shelf_with_legs(
                                 │  │  ← peg (top of leg, inside shelf)
         z = -leg_height     ────┴──┘── bottom of leg
 
-    Screw-joint lugs
-    ~~~~~~~~~~~~~~~~
-    When *screw_joint* is enabled, flat rectangular lugs with centred
-    vertical through-holes are added to the outer faces of both the shelf
-    pieces and the legs.  The lugs sit at the shelf bottom face (world z = 0)
-    so they align in the assembly:
-
-    * **Shelf lugs** — fused to each shelf piece that has an outer edge,
-      extending *outward* (beyond the shelf footprint) from each outer face
-      at z = 0 … *screw_joint_thickness*.
-    * **Leg lugs** — fused to each leg at the shoulder (local
-      z = leg_height, world z = 0), extending outward from the two outer
-      corner faces at the same z range.
-
-    The two mating lugs occupy the same world-space region and are designed
-    to be assembled with one lug on top of the other; a vertical screw
-    (or bolt) passes through both.  The heat-set insert can be placed in
-    either piece's hole; the screw passes through the other.
+    Screw-joint holes
+    ~~~~~~~~~~~~~~~~~
+    When *screw_joint* is enabled, vertical cylindrical through-holes are
+    drilled in the bridge material on **each side** of every cut line.
+    The two holes (one per adjacent piece) sit side-by-side when the pieces
+    are assembled so a screw inserted from the top locks them together.
+    See :func:`make_piece` for the full geometry description.
 
     Parameters
     ----------
@@ -2694,17 +2652,13 @@ def create_shelf_with_legs(
     joint_depth           : finger penetration depth (mm).
                             ``None`` → ``joint_width / 3``.
     joint_style           : ``'step'`` (default) or ``'taper'``.
-    screw_joint           : when ``True`` screw-joint lugs are added to the
-                            outer faces of all shelf pieces and all legs.
-    screw_joint_thickness : height (Z) of each lug (mm).  Default 3.0 mm.
-    screw_joint_spacing   : centre-to-centre spacing between lugs along each
-                            outer shelf edge (mm).  ``0`` (default) places a
-                            single lug at the midpoint of each edge segment.
-    screw_hole_diameter   : diameter of the vertical through-hole drilled in
-                            every lug (mm).  The same diameter is used on
-                            both the shelf and leg lugs so that a heat-set
-                            insert fits in one hole while the screw shaft
-                            passes through the other.  Default 3.5 mm.
+    screw_joint           : when ``True`` screw through-holes are drilled in
+                            the bridge material on each side of every cut line.
+    screw_joint_spacing   : hole spacing along each joint face (mm).
+                            ``0`` (default) places one hole at the midpoint.
+    screw_hole_diameter   : diameter of each screw through-hole (mm).
+                            Same diameter on both sides of every joint.
+                            Default 3.5 mm.
 
     Returns
     -------
@@ -2774,15 +2728,6 @@ def create_shelf_with_legs(
             )
         )
 
-    # Pre-compute screw lug arm size (used for both shelf and leg lugs).
-    if screw_joint and screw_hole_diameter > _GEOM_EPS:
-        _lug_arm = max(
-            _LUG_HOLE_DIAMETER_RATIO * screw_hole_diameter,
-            _LUG_THICKNESS_RATIO     * screw_joint_thickness,
-        )
-    else:
-        _lug_arm = 0.0
-
     # ------------------------------------------------------------------
     # Build shelf pieces and cut blind sockets where they overlap.
     # ------------------------------------------------------------------
@@ -2805,6 +2750,9 @@ def create_shelf_with_legs(
                 support_width=support_width,
                 joint_depth=joint_depth,
                 joint_style=joint_style,
+                screw_joint=screw_joint,
+                screw_hole_diameter=screw_hole_diameter,
+                screw_joint_spacing=screw_joint_spacing,
             )
 
             # Cut blind sockets and round through-holes that intersect this piece
@@ -2821,49 +2769,16 @@ def create_shelf_with_legs(
                         and cy + pin_hole_radius > y0 and cy - pin_hole_radius < y1):
                     shape = shape.cut(pin_cutter)
 
-            # Optional screw-joint lugs on outer edges of this piece.
-            if screw_joint and _lug_arm > _GEOM_EPS:
-                piece_lugs = _shelf_piece_screw_lugs(
-                    x0, x1, y0, y1,
-                    width, length,
-                    _lug_arm,
-                    screw_joint_thickness,
-                    screw_hole_diameter * 0.5,
-                    screw_joint_spacing,
-                )
-                if piece_lugs:
-                    shape = _fuse_shapes([shape] + piece_lugs)
-
             results.append((f"Piece_{ix}_{iy}", shape, App.Vector(0.0, 0.0, 0.0)))
 
     # ------------------------------------------------------------------
     # Build legs at the local origin; placement applied by the caller.
-    #
-    # Each corner leg has a specific pair of outer faces determined by which
-    # corner it occupies.  The lug_x_side / lug_y_side parameters tell
-    # make_leg() which face to place the lug on:
-    #
-    #   BottomLeft  (i=0): x_outer = x=0  (-1), y_outer = y=0  (-1)
-    #   BottomRight (i=1): x_outer = x=lw (+1), y_outer = y=0  (-1)
-    #   TopLeft     (i=2): x_outer = x=0  (-1), y_outer = y=lw (+1)
-    #   TopRight    (i=3): x_outer = x=lw (+1), y_outer = y=lw (+1)
     # ------------------------------------------------------------------
-    _lug_x_sides = (-1, +1, -1, +1)
-    _lug_y_sides = (-1, -1, +1, +1)
-
     corner_labels = ["BottomLeft", "BottomRight", "TopLeft", "TopRight"]
     for i, (label, (px, py, pz)) in enumerate(zip(corner_labels, placements)):
         results.append((
             f"Leg_{i}_{label}",
-            make_leg(
-                leg_width, leg_height, peg_depth,
-                shelf_height=height,
-                screw_joint=screw_joint,
-                screw_joint_thickness=screw_joint_thickness,
-                screw_hole_diameter=screw_hole_diameter,
-                lug_x_side=_lug_x_sides[i],
-                lug_y_side=_lug_y_sides[i],
-            ),
+            make_leg(leg_width, leg_height, peg_depth, shelf_height=height),
             App.Vector(px, py, pz),
         ))
 
