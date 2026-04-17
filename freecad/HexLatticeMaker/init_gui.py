@@ -279,6 +279,79 @@ def _build_gridfinity_box(params: dict):
     )
 
 
+# ---------------------------------------------------------------------------
+# Command: CreateTrapezoidPrism
+# ---------------------------------------------------------------------------
+
+class CreateTrapezoidPrismCmd:
+    """FreeCAD command that opens the trapezoid-prism dialog and creates parts."""
+
+    def GetResources(self):
+        return {
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "MenuText": "Create Trapezoid Prism",
+            "ToolTip":  (
+                "Create a parametric trapezoidal prism that can be split "
+                "horizontally and joined with a 3D-printed screw and nut."
+            ),
+        }
+
+    def IsActive(self):
+        return True   # always available
+
+    def Activated(self):
+        """Show dialog, then build and add shapes to the active document."""
+        try:
+            from .create_part_dialog import TrapezoidPrismDialog
+        except ImportError:
+            from create_part_dialog import TrapezoidPrismDialog
+
+        dlg = TrapezoidPrismDialog(Gui.getMainWindow())
+        if dlg.exec_() != dlg.Accepted:
+            return
+
+        params = dlg.get_params()
+        _build_trapezoid_prism(params)
+
+
+def _build_trapezoid_prism(params: dict):
+    """Build trapezoid prism pieces and add them to the FreeCAD document."""
+    try:
+        from .trapezoid_prism_core import create_trapezoid_prism_pieces
+    except ImportError:
+        from trapezoid_prism_core import create_trapezoid_prism_pieces
+
+    doc = App.activeDocument()
+    if doc is None:
+        doc = App.newDocument("TrapezoidPrism")
+
+    screw_info = (
+        f", screw_r={params['screw_radius']} mm, extend={params['extend_amount']} mm"
+        if params.get("add_screw") else ""
+    )
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Creating trapezoid prism "
+        f"front={params['front_w']}×{params['front_h']} mm, "
+        f"back={params['back_w']}×{params['back_h']} mm, "
+        f"length={params['length']} mm, "
+        f"split={params['split_height']} mm"
+        f"{screw_info} …\n"
+    )
+
+    pieces = create_trapezoid_prism_pieces(**params)
+
+    for name, shape, placement in pieces:
+        obj = doc.addObject("Part::Feature", name)
+        obj.Shape = shape
+        obj.Placement = App.Placement(placement, App.Rotation())
+
+    doc.recompute()
+    Gui.SendMsgToActiveView("ViewFit")
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Done – {len(pieces)} trapezoid prism piece(s) created.\n"
+    )
+
+
 class HexLatticeMakerWorkbench(Gui.Workbench):
     """HexLatticeMaker workbench."""
 
@@ -293,14 +366,17 @@ class HexLatticeMakerWorkbench(Gui.Workbench):
         Gui.addCommand("HexLatticeMaker_CreatePart",      CreateHexLatticePartCmd())
         Gui.addCommand("HexLatticeMaker_CreateShelfLegs", CreateShelfWithLegsCmd())
         Gui.addCommand("HexLatticeMaker_CreateGFBox",     CreateGridfinityBoxCmd())
+        Gui.addCommand("HexLatticeMaker_CreateTrapPrism", CreateTrapezoidPrismCmd())
         self.appendToolbar("HexLatticeMaker",
                            ["HexLatticeMaker_CreatePart",
                             "HexLatticeMaker_CreateShelfLegs",
-                            "HexLatticeMaker_CreateGFBox"])
+                            "HexLatticeMaker_CreateGFBox",
+                            "HexLatticeMaker_CreateTrapPrism"])
         self.appendMenu("Hex Lattice",
                         ["HexLatticeMaker_CreatePart",
                          "HexLatticeMaker_CreateShelfLegs",
-                         "HexLatticeMaker_CreateGFBox"])
+                         "HexLatticeMaker_CreateGFBox",
+                         "HexLatticeMaker_CreateTrapPrism"])
         App.Console.PrintLog("[HexLatticeMaker] Workbench initialised.\n")
 
     def Activated(self):
