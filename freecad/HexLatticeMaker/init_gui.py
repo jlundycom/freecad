@@ -93,8 +93,9 @@ class _HexLatticeFlatFeature:
             from .hex_lattice_core import LATTICE_TYPES
         except ImportError:
             from hex_lattice_core import LATTICE_TYPES
-        obj.LatticeType = list(LATTICE_TYPES.keys())
-        obj.LatticeType = "solid"
+        _lt_keys = list(LATTICE_TYPES.keys())
+        obj.LatticeType = _lt_keys
+        obj.LatticeType = _lt_keys[0]  # first key is the default (currently "solid")
 
         obj.addProperty(
             "App::PropertyEnumeration", "JointStyle", "Joints",

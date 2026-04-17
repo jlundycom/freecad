@@ -2344,7 +2344,10 @@ def make_leg(
 # Screw-joint hole helpers
 # ---------------------------------------------------------------------------
 
-_SCREW_HOLE_MAX_COUNT = 1000  # safety cap on holes per cut face
+_SCREW_HOLE_MAX_COUNT    = 1000   # safety cap on holes per cut face
+_SCREW_HOLE_OFFSET_DIV   = 4.0    # hole offset = joint_w / this value
+                                   # (places hole at the mid-point of the
+                                   #  bridge half-width on each side of cut)
 
 
 def screw_lug_positions(
@@ -2374,7 +2377,7 @@ def screw_lug_positions(
         return []
     if spacing <= _GEOM_EPS:
         return [(edge_start + edge_end) * 0.5]
-    n = min(_SCREW_HOLE_MAX_COUNT, max(1, int(math.floor(edge_len / spacing))))
+    n = min(_SCREW_HOLE_MAX_COUNT, max(1, int(edge_len // spacing)))
     total_span = (n - 1) * spacing if n > 1 else 0.0
     start = edge_start + (edge_len - total_span) * 0.5
     return [start + i * spacing for i in range(n)]
@@ -2424,8 +2427,9 @@ def _apply_screw_joint_holes(
     import Part
 
     hole_r = hole_diam * 0.5
-    # Place hole centre at joint_w/4 from the cut face (centre of bridge half)
-    offset = joint_w / 4.0
+    # Place hole centre at joint_w / _SCREW_HOLE_OFFSET_DIV from the cut face
+    # (mid-point of the bridge half-width on each side of the cut).
+    offset = joint_w / _SCREW_HOLE_OFFSET_DIV
 
     cutters = []
 
