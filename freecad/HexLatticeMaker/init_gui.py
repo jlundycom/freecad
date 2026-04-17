@@ -146,6 +146,7 @@ def _build_shelf_with_legs(params: dict):
     )
 
 
+
 # ---------------------------------------------------------------------------
 # Command: CreateBox
 # ---------------------------------------------------------------------------
@@ -212,8 +213,209 @@ def _build_box(params: dict):
 
 
 # ---------------------------------------------------------------------------
-# Workbench definition
+# Command: CreateGridfinityBox
 # ---------------------------------------------------------------------------
+
+class CreateGridfinityBoxCmd:
+    """FreeCAD command that opens the Gridfinity dialog and creates the box."""
+
+    def GetResources(self):
+        return {
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "MenuText": "Create Gridfinity Box",
+            "ToolTip":  (
+                "Create a parametric Gridfinity-compatible storage box with "
+                "customisable interior pockets, optional lid, and optional "
+                "corner magnet holes."
+            ),
+        }
+
+    def IsActive(self):
+        return True   # always available
+
+    def Activated(self):
+        """Show dialog, then build and add shapes to the active document."""
+        try:
+            from .create_part_dialog import GridfinityDialog
+        except ImportError:
+            from create_part_dialog import GridfinityDialog
+
+        dlg = GridfinityDialog(Gui.getMainWindow())
+        if dlg.exec_() != dlg.Accepted:
+            return
+
+        params = dlg.get_params()
+        _build_gridfinity_box(params)
+
+
+def _build_gridfinity_box(params: dict):
+    """Build gridfinity box parts and add them to the FreeCAD document.
+
+    Workflow
+    --------
+    1. The raw box body (no container cuts) is added as a hidden
+       ``Part::Feature`` named ``GF_Box_Body``.
+    2. Each container pocket is added as a hidden ``Part::Feature`` with its
+       geometry centred at the local origin and its world position set via
+       the ``Placement`` attribute.
+    3. A chain of ``Part::Cut`` objects is built — one per container — so
+       that repositioning a container feature automatically updates the cut.
+       The last (or only) cut is named ``GF_Box`` and left visible.
+       Intermediate cuts are hidden.
+    4. If no containers are provided, ``GF_Box_Body`` is renamed ``GF_Box``
+       and made visible directly.
+    5. The optional lid (``GF_Lid``) is added as a separate visible feature.
+    """
+    try:
+        from .gridfinity_core import create_gridfinity_box, GRIDFINITY_UNIT
+    except ImportError:
+        from gridfinity_core import create_gridfinity_box, GRIDFINITY_UNIT
+
+    doc = App.activeDocument()
+    if doc is None:
+        doc = App.newDocument("GridfinityBox")
+
+    outer_x = params["grid_x"] * GRIDFINITY_UNIT
+    outer_y = params["grid_y"] * GRIDFINITY_UNIT
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Creating Gridfinity box "
+        f"{params['grid_x']} × {params['grid_y']} units "
+        f"({outer_x:.0f} × {outer_y:.0f} mm), "
+        f"height={params['box_height']} mm …\n"
+    )
+
+    result = create_gridfinity_box(**{k: v for k, v in params.items()})
+
+    # ------------------------------------------------------------------
+    # 1. Box body (uncut) – hidden so only the final cut is visible
+    # ------------------------------------------------------------------
+    box_body_obj = doc.addObject("Part::Feature", "GF_Box_Body")
+    box_body_obj.Shape = result["box_body"]
+    box_body_obj.Visibility = False
+
+    # ------------------------------------------------------------------
+    # 2. Container cutter features – geometry centred at origin,
+    #    positioned via Placement
+    # ------------------------------------------------------------------
+    container_objs = []
+    for cspec in result["containers"]:
+        cobj = doc.addObject("Part::Feature", cspec["name"])
+        cobj.Shape = cspec["shape"]
+        px, py, pz = cspec["placement"]
+        cobj.Placement = App.Placement(App.Vector(px, py, pz), App.Rotation())
+        cobj.Visibility = False
+        container_objs.append(cobj)
+
+    # ------------------------------------------------------------------
+    # 3. Part::Cut chain – each cut links a container to the previous result
+    #    so that moving the container updates the hole automatically
+    # ------------------------------------------------------------------
+    current_obj = box_body_obj
+    for i, cobj in enumerate(container_objs):
+        is_last  = (i == len(container_objs) - 1)
+        cut_name = "GF_Box" if is_last else f"GF_Cut_{i + 1}"
+        cut_obj  = doc.addObject("Part::Cut", cut_name)
+        cut_obj.Base = current_obj
+        cut_obj.Tool = cobj
+        cut_obj.Visibility = is_last
+        current_obj = cut_obj
+
+    # If no containers were added, the box body is the final object
+    if not container_objs:
+        box_body_obj.Label = "GF_Box"
+        box_body_obj.Visibility = True
+
+    # ------------------------------------------------------------------
+    # 4. Optional lid
+    # ------------------------------------------------------------------
+    if result.get("lid") is not None:
+        lid_obj = doc.addObject("Part::Feature", "GF_Lid")
+        lid_obj.Shape = result["lid"]
+
+    doc.recompute()
+    Gui.SendMsgToActiveView("ViewFit")
+    container_count = len(container_objs)
+    has_lid = result.get("lid") is not None
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Done – Gridfinity box created "
+        f"with {container_count} container pocket(s)"
+        + (" + lid" if has_lid else "")
+        + ".\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Command: CreateTrapezoidPrism
+# ---------------------------------------------------------------------------
+
+class CreateTrapezoidPrismCmd:
+    """FreeCAD command that opens the trapezoid-prism dialog and creates parts."""
+
+    def GetResources(self):
+        return {
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "MenuText": "Create Trapezoid Prism",
+            "ToolTip":  (
+                "Create a parametric trapezoidal prism that can be split "
+                "horizontally and joined with a 3D-printed screw and nut."
+            ),
+        }
+
+    def IsActive(self):
+        return True   # always available
+
+    def Activated(self):
+        """Show dialog, then build and add shapes to the active document."""
+        try:
+            from .create_part_dialog import TrapezoidPrismDialog
+        except ImportError:
+            from create_part_dialog import TrapezoidPrismDialog
+
+        dlg = TrapezoidPrismDialog(Gui.getMainWindow())
+        if dlg.exec_() != dlg.Accepted:
+            return
+
+        params = dlg.get_params()
+        _build_trapezoid_prism(params)
+
+
+def _build_trapezoid_prism(params: dict):
+    """Build trapezoid prism pieces and add them to the FreeCAD document."""
+    try:
+        from .trapezoid_prism_core import create_trapezoid_prism_pieces
+    except ImportError:
+        from trapezoid_prism_core import create_trapezoid_prism_pieces
+
+    doc = App.activeDocument()
+    if doc is None:
+        doc = App.newDocument("TrapezoidPrism")
+
+    screw_info = (
+        f", screw_r={params['screw_radius']} mm, extend={params['extend_amount']} mm"
+        if params.get("add_screw") else ""
+    )
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Creating trapezoid prism "
+        f"front={params['front_w']}×{params['front_h']} mm, "
+        f"back={params['back_w']}×{params['back_h']} mm, "
+        f"length={params['length']} mm, "
+        f"split={params['split_height']} mm"
+        f"{screw_info} …\n"
+    )
+
+    pieces = create_trapezoid_prism_pieces(**params)
+
+    for name, shape, placement in pieces:
+        obj = doc.addObject("Part::Feature", name)
+        obj.Shape = shape
+        obj.Placement = App.Placement(placement, App.Rotation())
+
+    doc.recompute()
+    Gui.SendMsgToActiveView("ViewFit")
+    App.Console.PrintMessage(
+        f"[HexLatticeMaker] Done – {len(pieces)} trapezoid prism piece(s) created.\n"
+    )
+
 
 class HexLatticeMakerWorkbench(Gui.Workbench):
     """HexLatticeMaker workbench."""
@@ -229,14 +431,20 @@ class HexLatticeMakerWorkbench(Gui.Workbench):
         Gui.addCommand("HexLatticeMaker_CreatePart",      CreateHexLatticePartCmd())
         Gui.addCommand("HexLatticeMaker_CreateShelfLegs", CreateShelfWithLegsCmd())
         Gui.addCommand("HexLatticeMaker_CreateBox",       CreateBoxCmd())
+        Gui.addCommand("HexLatticeMaker_CreateGFBox",     CreateGridfinityBoxCmd())
+        Gui.addCommand("HexLatticeMaker_CreateTrapPrism", CreateTrapezoidPrismCmd())
         self.appendToolbar("HexLatticeMaker",
                            ["HexLatticeMaker_CreatePart",
                             "HexLatticeMaker_CreateShelfLegs",
-                            "HexLatticeMaker_CreateBox"])
+                            "HexLatticeMaker_CreateBox",
+                            "HexLatticeMaker_CreateGFBox",
+                            "HexLatticeMaker_CreateTrapPrism"])
         self.appendMenu("Hex Lattice",
                         ["HexLatticeMaker_CreatePart",
                          "HexLatticeMaker_CreateShelfLegs",
-                         "HexLatticeMaker_CreateBox"])
+                         "HexLatticeMaker_CreateBox",
+                         "HexLatticeMaker_CreateGFBox",
+                         "HexLatticeMaker_CreateTrapPrism"])
         App.Console.PrintLog("[HexLatticeMaker] Workbench initialised.\n")
 
     def Activated(self):

@@ -47,8 +47,13 @@ Finger joints — Stepped Shelf Style (default)
 
   Step geometry
   ~~~~~~~~~~~~~
-  tab_w  = joint_w               (width of each finger along the face)
-  tab_d  = joint_w / 2           (depth of each tab into the adjacent piece)
+  tab_w  = finger_w  (or joint_w when finger_w is not specified)
+                                 (width of each finger along the cut face)
+  tab_d  = joint_w / 3           (default depth of each tab; fingers fill 2/3 of
+                                   the bridge half-width, leaving 1/3 as solid
+                                   backing — override with the joint_depth param)
+  Note: finger_w and joint_w are independent.  A 20 mm-wide tab can sit inside
+  a 10 mm bridge zone with a 4 mm depth, leaving 1 mm solid on each side.
   fit    = FIT_CLEARANCE         (bilateral assembly clearance along the face)
   half_h = height / 2            (Z step boundary)
 
@@ -1946,6 +1951,7 @@ def make_piece(
     leg_zones: list = (),
     lattice_type: str = "hexagonal",
     joint_w: float = None,
+    finger_w: float = None,
     finger_spacing: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
@@ -1985,10 +1991,17 @@ def make_piece(
                      restored after hole cutting via a boolean fuse.
     lattice_type   : one of the keys in :data:`LATTICE_TYPES`
                      (default ``"hexagonal"``).
-    joint_w        : **inner** joint / bridge width (mm).  Controls the bridge
-                     band half-width at cut lines and the finger-joint tab
-                     width (``tab_w = joint_w``).
+    joint_w        : **bridge** width (mm).  Controls the solid band
+                     half-width ``(joint_w / 2)`` on each side of every cut
+                     line.  This is the *solid-line* width of the joint.
                      Defaults to *perim_w* for backward compatibility.
+    finger_w       : **tab / finger width** (mm) — how wide each individual
+                     finger tab is along the cut face.  Independent of
+                     *joint_w*, so e.g. ``joint_w=10, finger_w=20,
+                     joint_depth=4`` gives a 10 mm-wide solid bridge with
+                     20 mm-wide fingers that penetrate 4 mm deep (leaving
+                     1 mm solid backing on each side).
+                     Defaults to ``None`` → falls back to *joint_w*.
     finger_spacing : gap between consecutive fingers (mm).  ``0`` (default)
                      places fingers contiguously, filling the entire cut face.
                      When > 0, N fingers are centred on the face with
@@ -2002,7 +2015,12 @@ def make_piece(
                      Defaults to *joint_w* when not specified.
     joint_depth    : how far each finger tab penetrates into the adjacent
                      piece in the direction perpendicular to the cut face (mm).
-                     Defaults to ``None`` → ``joint_w * 0.5``.
+                     Must be less than ``joint_w / 2`` to leave solid backing
+                     beyond the tab tips (preventing fingers from reaching
+                     lattice voids in the adjacent piece).
+                     Defaults to ``None`` → ``joint_w / 3`` (fingers fill 2/3
+                     of the bridge half-width, leaving 1/3 as a solid support
+                     bar behind the slot).
     joint_style    : ``'step'`` (default) — alternating stepped shelf joints
                      that lock assembled pieces against vertical movement.
                      ``'taper'`` — legacy tapered box joints (draft angle in Z).
@@ -2015,9 +2033,9 @@ def make_piece(
     if support_width is None:
         support_width = joint_w
 
-    tab_w  = joint_w
+    tab_w  = finger_w if (finger_w is not None and finger_w > 0.0) else joint_w
     tab_d  = (joint_depth if (joint_depth is not None and joint_depth > 0.0)
-              else joint_w * 0.5)
+              else joint_w / 3.0)
 
     # ------------------------------------------------------------------
     # 1. Base rectangular body
@@ -2280,6 +2298,7 @@ def create_all_pieces(
     max_piece_size: float = MAX_PIECE_SIZE,
     lattice_type: str = "hexagonal",
     joint_width: float = None,
+    finger_w: float = None,
     finger_spacing: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
@@ -2303,9 +2322,13 @@ def create_all_pieces(
                             printer exclusion zones.
     lattice_type          : one of the keys in :data:`LATTICE_TYPES`
                             (default ``"hexagonal"``).
-    joint_width           : **inner** joint / bridge width (mm).  Controls the
-                            bridge-band width at cut lines and the finger-joint
-                            tab width.  Defaults to *perim_width*.
+    joint_width           : **bridge** width (mm) — the solid-line width of the
+                            joint zone.  Controls bridge-band half-width at cut
+                            lines.  Defaults to *perim_width*.
+    finger_w              : **tab / finger width** (mm) — the width of each
+                            individual finger tab along the cut face.
+                            Independent of *joint_width*; defaults to
+                            *joint_width* when ``None``.
     finger_spacing        : gap between consecutive fingers (mm).  ``0``
                             (default) places fingers contiguously (full face).
                             When > 0, N centred fingers are placed with
@@ -2315,7 +2338,7 @@ def create_all_pieces(
     support_width         : full width of each interior support bar (mm).
                             Defaults to *joint_width*.
     joint_depth           : how far each finger tab penetrates into the adjacent
-                            piece (mm).  ``None`` → ``joint_width * 0.5``.
+                            piece (mm).  ``None`` → ``joint_width / 3``.
     joint_style           : ``'step'`` (default) — alternating stepped shelf
                             joints.  ``'taper'`` — legacy tapered box joints.
 
@@ -2346,6 +2369,7 @@ def create_all_pieces(
                 x_cuts, y_cuts,
                 lattice_type=lattice_type,
                 joint_w=joint_width,
+                finger_w=finger_w,
                 finger_spacing=finger_spacing,
                 support_spacing=support_spacing,
                 support_width=support_width,
@@ -2369,6 +2393,7 @@ def create_shelf_with_legs(
     leg_width: float = 20.0,
     lattice_type: str = "hexagonal",
     joint_width: float = None,
+    finger_w: float = None,
     finger_spacing: float = 0.0,
     support_spacing: float = 0.0,
     support_width: float = None,
@@ -2409,9 +2434,13 @@ def create_shelf_with_legs(
                             fits entirely within the solid perimeter band.
     lattice_type          : one of the keys in :data:`LATTICE_TYPES`
                             (default ``"hexagonal"``).
-    joint_width           : **inner** joint / bridge width (mm).  Controls the
-                            bridge-band width at cut lines and the finger-joint
-                            tab width.  Defaults to *perim_width*.
+    joint_width           : **bridge** width (mm) — the solid-line width of the
+                            joint zone.  Controls bridge-band half-width at cut
+                            lines.  Defaults to *perim_width*.
+    finger_w              : **tab / finger width** (mm) — the width of each
+                            individual finger tab along the cut face.
+                            Independent of *joint_width*; defaults to
+                            *joint_width* when ``None``.
     finger_spacing        : gap between consecutive fingers (mm).  ``0``
                             (default) places fingers contiguously (full face).
                             When > 0, N centred fingers are placed with
@@ -2421,7 +2450,7 @@ def create_shelf_with_legs(
     support_width         : full width of each interior support bar (mm).
                             Defaults to *joint_width*.
     joint_depth           : how far each finger tab penetrates into the adjacent
-                            piece (mm).  ``None`` → ``joint_width * 0.5``.
+                            piece (mm).  ``None`` → ``joint_width / 3``.
     joint_style           : ``'step'`` (default) — alternating stepped shelf
                             joints.  ``'taper'`` — legacy tapered box joints.
 
@@ -2515,6 +2544,7 @@ def create_shelf_with_legs(
                 leg_zones=leg_zones,
                 lattice_type=lattice_type,
                 joint_w=joint_width,
+                finger_w=finger_w,
                 finger_spacing=finger_spacing,
                 support_spacing=support_spacing,
                 support_width=support_width,
