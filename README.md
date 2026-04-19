@@ -19,6 +19,7 @@ FDM 3-D printer bed.
 | **Weight-bearing** | Multiple full-height finger tabs provide excellent shear and tension resistance. For extra strength apply CA glue or use M3 bolts through the bridge area. |
 | **FDM-friendly clearance** | Default assembly clearance is 0.15 mm (bilateral), designed for typical FFF/FDM printers. |
 | **Multiple tilings** | Choose from 5 euclidean uniform tiling patterns via the dropdown (see below). |
+| **Reverse ray cylinder** | Build a cylindrical shadow model from a selected Sketch/SVG and a selected light point. |
 
 ---
 
@@ -87,6 +88,15 @@ Windows), then run it from **Macro ▸ Macros …**.
    object named `Piece_X_Y` (X = column, Y = row).
 5. Select a piece ▸ **File ▸ Export** ▸ choose STL or 3MF format ▸ slice and
    print.
+
+### Reverse Ray Cylinder (shadow model)
+
+1. In the 3D view, select two items in order:
+   - a source Sketch/SVG object (edge geometry),
+   - a point/vertex object for the light position.
+2. Run **Hex Lattice ▸ Create Reverse Ray Cylinder**.
+3. Enter cylinder radius and height when prompted.
+4. The tool creates `ReverseRayCylinder` in the active document.
 
 ### From the Macro
 
