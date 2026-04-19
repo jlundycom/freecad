@@ -28,7 +28,7 @@ def line_cylinder_intersection_2d(
     radius : float
         Circle radius.
     center_xy : (x, y)
-        Circle centre in XY.
+        Circle center in XY.
 
     Returns
     -------
