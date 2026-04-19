@@ -352,6 +352,109 @@ def _build_trapezoid_prism(params: dict):
     )
 
 
+class CreateReverseRayTracingModelCmd:
+    """Build a cylindrical reverse-ray shadow model from a sketch/SVG selection."""
+
+    def GetResources(self):
+        return {
+            "Pixmap":   os.path.join(_ICON_PATH, "HexLatticeMaker.svg"),
+            "MenuText": "Create Reverse Ray Cylinder",
+            "ToolTip":  (
+                "Select [Sketch/SVG shape, light-point], then create a cylindrical "
+                "reverse ray-tracing shadow model."
+            ),
+        }
+
+    def IsActive(self):
+        return True
+
+    def _extract_light_point(self, selection_ex):
+        if selection_ex.SubObjects:
+            sub = selection_ex.SubObjects[0]
+            if hasattr(sub, "Point"):
+                return sub.Point
+        obj = selection_ex.Object
+        if hasattr(obj, "Shape") and getattr(obj.Shape, "Vertexes", None):
+            verts = obj.Shape.Vertexes
+            if verts:
+                return verts[0].Point
+        if hasattr(obj, "Placement"):
+            return obj.Placement.Base
+        raise ValueError("Unable to extract a light point from second selection")
+
+    def Activated(self):
+        try:
+            from .reverse_ray_core import create_reverse_ray_cylinder
+        except ImportError:
+            from reverse_ray_core import create_reverse_ray_cylinder
+
+        try:
+            from PySide2 import QtWidgets
+        except Exception:
+            from PySide6 import QtWidgets
+
+        sel_ex = Gui.Selection.getSelectionEx()
+        if len(sel_ex) < 2:
+            QtWidgets.QMessageBox.warning(
+                Gui.getMainWindow(),
+                "Reverse Ray Cylinder",
+                "Select two items: (1) Sketch/SVG shape, (2) light point (vertex/point object).",
+            )
+            return
+
+        image_obj = sel_ex[0].Object
+        if not hasattr(image_obj, "Shape") or not getattr(image_obj.Shape, "Edges", None):
+            QtWidgets.QMessageBox.warning(
+                Gui.getMainWindow(),
+                "Reverse Ray Cylinder",
+                "First selection must be an object with edge geometry (Sketch/SVG).",
+            )
+            return
+
+        try:
+            light_pt = self._extract_light_point(sel_ex[1])
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                Gui.getMainWindow(),
+                "Reverse Ray Cylinder",
+                f"Could not determine light point: {exc}",
+            )
+            return
+
+        rad, ok = QtWidgets.QInputDialog.getDouble(
+            Gui.getMainWindow(), "Reverse Ray Cylinder", "Cylinder radius (mm):", 40.0, 1.0, 10000.0, 2
+        )
+        if not ok:
+            return
+        h, ok = QtWidgets.QInputDialog.getDouble(
+            Gui.getMainWindow(), "Reverse Ray Cylinder", "Cylinder height (mm):", 120.0, 1.0, 10000.0, 2
+        )
+        if not ok:
+            return
+
+        try:
+            shape = create_reverse_ray_cylinder(
+                image_shape=image_obj.Shape,
+                light_point=light_pt,
+                cylinder_radius=rad,
+                cylinder_height=h,
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                Gui.getMainWindow(),
+                "Reverse Ray Cylinder",
+                f"Model creation failed: {exc}",
+            )
+            return
+
+        doc = App.activeDocument() or App.newDocument("ReverseRayCylinder")
+        obj = doc.addObject("Part::Feature", "ReverseRayCylinder")
+        obj.Shape = shape
+        doc.recompute()
+        Gui.SendMsgToActiveView("ViewFit")
+        App.Console.PrintMessage("[HexLatticeMaker] Reverse ray cylinder created.\n")
+
+
 class HexLatticeMakerWorkbench(Gui.Workbench):
     """HexLatticeMaker workbench."""
 
@@ -367,16 +470,19 @@ class HexLatticeMakerWorkbench(Gui.Workbench):
         Gui.addCommand("HexLatticeMaker_CreateShelfLegs", CreateShelfWithLegsCmd())
         Gui.addCommand("HexLatticeMaker_CreateGFBox",     CreateGridfinityBoxCmd())
         Gui.addCommand("HexLatticeMaker_CreateTrapPrism", CreateTrapezoidPrismCmd())
+        Gui.addCommand("HexLatticeMaker_CreateReverseRay", CreateReverseRayTracingModelCmd())
         self.appendToolbar("HexLatticeMaker",
                            ["HexLatticeMaker_CreatePart",
-                            "HexLatticeMaker_CreateShelfLegs",
-                            "HexLatticeMaker_CreateGFBox",
-                            "HexLatticeMaker_CreateTrapPrism"])
+                             "HexLatticeMaker_CreateShelfLegs",
+                             "HexLatticeMaker_CreateGFBox",
+                             "HexLatticeMaker_CreateTrapPrism",
+                             "HexLatticeMaker_CreateReverseRay"])
         self.appendMenu("Hex Lattice",
                         ["HexLatticeMaker_CreatePart",
                          "HexLatticeMaker_CreateShelfLegs",
                          "HexLatticeMaker_CreateGFBox",
-                         "HexLatticeMaker_CreateTrapPrism"])
+                         "HexLatticeMaker_CreateTrapPrism",
+                         "HexLatticeMaker_CreateReverseRay"])
         App.Console.PrintLog("[HexLatticeMaker] Workbench initialised.\n")
 
     def Activated(self):
