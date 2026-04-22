@@ -15,6 +15,257 @@ _ICON_PATH = os.path.join(_DIR, "Resources", "Icons")
 
 
 # ---------------------------------------------------------------------------
+# Parametric FreeCAD feature classes (Part::FeaturePython)
+# ---------------------------------------------------------------------------
+# Objects created by this workbench are parametric: all input parameters are
+# stored as FreeCAD document properties, and the geometry is rebuilt
+# automatically when any property is changed via the Properties panel.
+
+class _ViewProvider:
+    """Minimal view provider for parametric HexLatticeMaker objects."""
+
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def getIcon(self):
+        return os.path.join(_ICON_PATH, "HexLatticeMaker.svg")
+
+    def attach(self, vobj):
+        pass
+
+    def updateData(self, fp, prop):
+        pass
+
+    def onChanged(self, vp, prop):
+        pass
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        pass
+
+
+class _HexLatticeFlatFeature:
+    """Parametric FreeCAD feature for a flat hex-lattice panel.
+
+    All panel parameters are stored as document properties.  FreeCAD calls
+    ``execute()`` automatically when any property is changed via the
+    Properties panel, rebuilding the full compound shape.
+    """
+
+    _FLOAT_PROPS = [
+        # (attr, group, description, default)
+        ("Width",          "Dimensions",  "Part width (mm)",                        300.0),
+        ("Length",         "Dimensions",  "Part length (mm)",                       300.0),
+        ("Height",         "Dimensions",  "Part height / thickness (mm)",            10.0),
+        ("PerimWidth",     "Lattice",     "Solid perimeter width (mm)",               6.0),
+        ("HexSize",        "Lattice",     "Cell size — side length (mm)",             8.0),
+        ("WallThickness",  "Lattice",     "Min wall thickness between cells (mm)",    1.5),
+        ("MaxPieceSize",   "Slicing",     "Maximum printable piece size (mm)",      220.0),
+        ("JointWidth",     "Joints",      "Bridge width (mm; 0 = auto)",              0.0),
+        ("FingerW",        "Joints",      "Finger tab width (mm; 0 = auto)",          0.0),
+        ("FingerSpacing",  "Joints",      "Gap between fingers (mm; 0 = contiguous)", 0.0),
+        ("JointDepth",     "Joints",      "Tab penetration depth (mm; 0 = auto)",     0.0),
+        ("SupportSpacing", "Structure",   "Support bar spacing (mm; 0 = none)",       0.0),
+        ("SupportWidth",   "Structure",   "Support bar width (mm; 0 = auto)",         0.0),
+        ("ScrewHoleDiam",  "ScrewJoints", "Screw hole diameter (mm)",                 3.5),
+        ("ScrewSpacing",   "ScrewJoints", "Hole spacing along joint face (mm; 0 = midpoint)", 0.0),
+    ]
+
+    _BOOL_PROPS = [
+        ("ScrewJoint", "ScrewJoints", "Add screw through-holes at every joint", False),
+    ]
+
+    def __init__(self, obj, params: dict):
+        for attr, group, desc, default in self._FLOAT_PROPS:
+            obj.addProperty("App::PropertyFloat", attr, group, desc)
+            setattr(obj, attr, default)
+        for attr, group, desc, default in self._BOOL_PROPS:
+            obj.addProperty("App::PropertyBool", attr, group, desc)
+            setattr(obj, attr, default)
+
+        obj.addProperty(
+            "App::PropertyEnumeration", "LatticeType", "Lattice",
+            "Lattice pattern type",
+        )
+        try:
+            from .hex_lattice_core import LATTICE_TYPES
+        except ImportError:
+            from hex_lattice_core import LATTICE_TYPES
+        _lt_keys = list(LATTICE_TYPES.keys())
+        obj.LatticeType = _lt_keys
+        obj.LatticeType = _lt_keys[0]  # first key is the default (currently "solid")
+
+        obj.addProperty(
+            "App::PropertyEnumeration", "JointStyle", "Joints",
+            "Joint style: step (default) or taper",
+        )
+        obj.JointStyle = ["step", "taper"]
+        obj.JointStyle = "step"
+
+        self._apply_params(obj, params)
+        obj.Proxy = self
+
+    # ------------------------------------------------------------------
+    def _apply_params(self, obj, params: dict):
+        _map = {
+            "width":               "Width",
+            "length":              "Length",
+            "height":              "Height",
+            "perim_width":         "PerimWidth",
+            "hex_size":            "HexSize",
+            "wall_thickness":      "WallThickness",
+            "max_piece_size":      "MaxPieceSize",
+            "lattice_type":        "LatticeType",
+            "joint_width":         "JointWidth",
+            "finger_w":            "FingerW",
+            "finger_spacing":      "FingerSpacing",
+            "joint_depth":         "JointDepth",
+            "support_spacing":     "SupportSpacing",
+            "support_width":       "SupportWidth",
+            "joint_style":         "JointStyle",
+            "screw_joint":         "ScrewJoint",
+            "screw_hole_diameter": "ScrewHoleDiam",
+            "screw_joint_spacing": "ScrewSpacing",
+        }
+        for py_key, attr in _map.items():
+            if py_key in params and params[py_key] is not None:
+                try:
+                    setattr(obj, attr, params[py_key])
+                except Exception:
+                    pass
+
+    def _collect_params(self, obj) -> dict:
+        return {
+            "width":               obj.Width,
+            "length":              obj.Length,
+            "height":              obj.Height,
+            "perim_width":         obj.PerimWidth,
+            "hex_size":            obj.HexSize,
+            "wall_thickness":      obj.WallThickness or None,
+            "max_piece_size":      obj.MaxPieceSize,
+            "lattice_type":        obj.LatticeType,
+            "joint_width":         obj.JointWidth or None,
+            "finger_w":            obj.FingerW or None,
+            "finger_spacing":      obj.FingerSpacing,
+            "joint_depth":         obj.JointDepth or None,
+            "support_spacing":     obj.SupportSpacing,
+            "support_width":       obj.SupportWidth or None,
+            "joint_style":         obj.JointStyle,
+            "screw_joint":         obj.ScrewJoint,
+            "screw_hole_diameter": obj.ScrewHoleDiam,
+            "screw_joint_spacing": obj.ScrewSpacing,
+        }
+
+    def execute(self, obj):
+        try:
+            try:
+                from .hex_lattice_core import create_all_pieces
+            except ImportError:
+                from hex_lattice_core import create_all_pieces
+            import Part
+        except ImportError as exc:
+            App.Console.PrintWarning(
+                f"[HexLatticeMaker] Cannot execute: {exc}\n"
+            )
+            return
+
+        params = self._collect_params(obj)
+        try:
+            pieces = create_all_pieces(**params)
+        except Exception as exc:
+            App.Console.PrintError(
+                f"[HexLatticeMaker] Geometry error in execute: {exc}\n"
+            )
+            return
+
+        if not pieces:
+            return
+        obj.Shape = Part.makeCompound([shp for _, shp in pieces])
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        pass
+
+
+class _ShelfWithLegsFeature(_HexLatticeFlatFeature):
+    """Parametric FreeCAD feature for a shelf panel with corner legs."""
+
+    _EXTRA_FLOAT_PROPS = [
+        ("LegHeight", "Legs", "Leg column height below shelf (mm)", 100.0),
+        ("LegWidth",  "Legs", "Leg square cross-section side (mm)",  20.0),
+    ]
+
+    def __init__(self, obj, params: dict):
+        super().__init__(obj, params)
+        for attr, group, desc, default in self._EXTRA_FLOAT_PROPS:
+            obj.addProperty("App::PropertyFloat", attr, group, desc)
+            setattr(obj, attr, default)
+        if "leg_height" in params:
+            try:
+                obj.LegHeight = params["leg_height"]
+            except Exception:
+                pass
+        if "leg_width" in params:
+            try:
+                obj.LegWidth = params["leg_width"]
+            except Exception:
+                pass
+
+    def _collect_params(self, obj) -> dict:
+        params = super()._collect_params(obj)
+        params["leg_height"] = obj.LegHeight
+        params["leg_width"]  = obj.LegWidth
+        return params
+
+    def execute(self, obj):
+        try:
+            try:
+                from .hex_lattice_core import create_shelf_with_legs
+            except ImportError:
+                from hex_lattice_core import create_shelf_with_legs
+            import Part
+        except ImportError as exc:
+            App.Console.PrintWarning(
+                f"[HexLatticeMaker] Cannot execute: {exc}\n"
+            )
+            return
+
+        params = self._collect_params(obj)
+        try:
+            pieces = create_shelf_with_legs(**params)
+        except Exception as exc:
+            App.Console.PrintError(
+                f"[HexLatticeMaker] Geometry error in execute: {exc}\n"
+            )
+            return
+
+        if not pieces:
+            return
+
+        # Apply placement vectors to produce world-space shapes for the compound.
+        shapes = []
+        for _name, shape, pl_vec in pieces:
+            if pl_vec.Length > 1e-9:
+                moved = shape.copy()
+                moved.translate(App.Vector(pl_vec.x, pl_vec.y, pl_vec.z))
+                shapes.append(moved)
+            else:
+                shapes.append(shape)
+
+        obj.Shape = Part.makeCompound(shapes)
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Command: CreateHexLatticePart
 # ---------------------------------------------------------------------------
 
@@ -52,31 +303,25 @@ class CreateHexLatticePartCmd:
 
 
 def _build_parts(params: dict):
-    """Build pieces and add them to the FreeCAD document."""
-    from .hex_lattice_core import create_all_pieces
-
+    """Build a parametric hex-lattice flat-panel feature and add it to the document."""
     doc = App.activeDocument()
     if doc is None:
         doc = App.newDocument("HexLatticePart")
 
     App.Console.PrintMessage(
-        f"[HexLatticeMaker] Creating pieces for "
+        f"[HexLatticeMaker] Creating parametric hex-lattice flat panel "
         f"{params['width']} × {params['length']} × {params['height']} mm "
-        f"(wall={params['wall_thickness']} mm, "
-        f"max_piece={params['max_piece_size']} mm) …\n"
+        f"(lattice={params.get('lattice_type', 'solid')}) …\n"
     )
 
-    pieces = create_all_pieces(**params)
-
-    for name, shape in pieces:
-        obj = doc.addObject("Part::Feature", name)
-        obj.Shape = shape
+    obj = doc.addObject("Part::FeaturePython", "HexLatticePart")
+    _HexLatticeFlatFeature(obj, params)
+    if hasattr(obj, "ViewObject") and obj.ViewObject:
+        _ViewProvider(obj.ViewObject)
 
     doc.recompute()
     Gui.SendMsgToActiveView("ViewFit")
-    App.Console.PrintMessage(
-        f"[HexLatticeMaker] Done – {len(pieces)} piece(s) created.\n"
-    )
+    App.Console.PrintMessage("[HexLatticeMaker] Done.\n")
 
 
 # ---------------------------------------------------------------------------
@@ -116,34 +361,25 @@ class CreateShelfWithLegsCmd:
 
 
 def _build_shelf_with_legs(params: dict):
-    """Build shelf pieces and leg parts, then add them to the FreeCAD document."""
-    from .hex_lattice_core import create_shelf_with_legs
-
+    """Build a parametric shelf-with-legs feature and add it to the document."""
     doc = App.activeDocument()
     if doc is None:
         doc = App.newDocument("ShelfWithLegs")
 
     App.Console.PrintMessage(
-        f"[HexLatticeMaker] Creating shelf with legs: "
+        f"[HexLatticeMaker] Creating parametric shelf "
         f"{params['width']} × {params['length']} × {params['height']} mm, "
         f"legs {params['leg_width']} × {params['leg_height']} mm …\n"
     )
 
-    pieces = create_shelf_with_legs(**params)
-
-    for name, shape, placement in pieces:
-        obj = doc.addObject("Part::Feature", name)
-        obj.Shape = shape
-        obj.Placement = App.Placement(placement, App.Rotation())
+    obj = doc.addObject("Part::FeaturePython", "ShelfWithLegs")
+    _ShelfWithLegsFeature(obj, params)
+    if hasattr(obj, "ViewObject") and obj.ViewObject:
+        _ViewProvider(obj.ViewObject)
 
     doc.recompute()
     Gui.SendMsgToActiveView("ViewFit")
-    leg_count   = sum(1 for n, _s, _p in pieces if n.startswith("Leg_"))
-    shelf_count = len(pieces) - leg_count
-    App.Console.PrintMessage(
-        f"[HexLatticeMaker] Done – {shelf_count} shelf piece(s) + "
-        f"{leg_count} leg(s) created.\n"
-    )
+    App.Console.PrintMessage("[HexLatticeMaker] Done.\n")
 
 
 

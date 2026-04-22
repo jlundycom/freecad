@@ -100,8 +100,12 @@ _GEOM_EPS        = 1e-9    # geometry epsilon: threshold for discarding near-zer
 # ---------------------------------------------------------------------------
 
 #: Ordered mapping of tiling key → display name for the UI dropdown.
+#: ``"solid"`` is listed first so it is the default selection in the UI;
+#: it produces a plain flat sheet with no lattice holes, which is useful
+#: for quick shape checks before switching to a patterned tiling.
 #: See TILING_PLAN.md for the plan to add the remaining semi-regular tilings.
 LATTICE_TYPES = {
+    "solid":                       "Solid (no holes)",
     "hexagonal":              "Hexagonal (6.6.6)",
     "square":                 "Square (4.4.4.4)",
     "triangular":             "Triangular (3.3.3.3.3.3)",
@@ -180,6 +184,23 @@ class TilingProvider:
         raise NotImplementedError(
             f"{type(self).__name__} must implement get_cells()"
         )
+
+
+class SolidTilingProvider(TilingProvider):
+    """Solid (no-hole) tiling — produces a plain flat sheet.
+
+    Returns no cell descriptors, so the base body remains completely solid.
+    This is useful for quickly creating a rectangular piece without any
+    lattice pattern, and for testing slicing and joint geometry in isolation.
+    """
+
+    display_name = "Solid (no holes)"
+
+    def cell_circumradius(self, cell_size: float) -> float:
+        return 0.0
+
+    def get_cells(self, gx0, gx1, gy0, gy1, cell_size, wall_t):
+        return []
 
 
 class HexagonalTilingProvider(TilingProvider):
@@ -1146,6 +1167,7 @@ class SnubHexagonalTilingProvider(TilingProvider):
 
 #: Registry mapping each LATTICE_TYPES key to its TilingProvider instance.
 _TILING_PROVIDERS = {
+    "solid":                         SolidTilingProvider(),
     "hexagonal":                     HexagonalTilingProvider(),
     "square":                        SquareTilingProvider(),
     "triangular":                    TriangularTilingProvider(),
@@ -1949,7 +1971,7 @@ def make_piece(
     x_cuts: list,
     y_cuts: list,
     leg_zones: list = (),
-    lattice_type: str = "hexagonal",
+    lattice_type: str = "solid",
     joint_w: float = None,
     finger_w: float = None,
     finger_spacing: float = 0.0,
@@ -1957,6 +1979,9 @@ def make_piece(
     support_width: float = None,
     joint_depth: float = None,
     joint_style: str = "step",
+    screw_joint: bool = False,
+    screw_hole_diameter: float = 3.5,
+    screw_joint_spacing: float = 0.0,
 ) -> object:  # returns Part.Shape
     """Build one interlocking piece of the lattice panel.
 
@@ -2024,6 +2049,20 @@ def make_piece(
     joint_style    : ``'step'`` (default) — alternating stepped shelf joints
                      that lock assembled pieces against vertical movement.
                      ``'taper'`` — legacy tapered box joints (draft angle in Z).
+    screw_joint    : when ``True``, **horizontal** cylindrical through-holes
+                     are drilled perpendicular to every cut face, entering
+                     from the joint face and exiting at the outer edge of the
+                     bridge band (depth = ``joint_w / 2``).  Both adjacent
+                     pieces get a coaxial hole at ``Z = height / 2`` and the
+                     same position along the face, so when assembled the two
+                     holes form a continuous channel.  A screw from the outer
+                     face of one bridge travels through and threads into a
+                     heat-set insert in the other piece.
+    screw_hole_diameter : diameter of each screw through-hole (mm).
+    screw_joint_spacing : centre-to-centre spacing between holes along each
+                     joint face (mm).  ``0`` (default) places one hole at the
+                     midpoint of the face; a positive value places holes at
+                     that interval, centred on the face.
     """
     import FreeCAD as App
     import Part
@@ -2145,6 +2184,24 @@ def make_piece(
                                 finger_spacing=finger_spacing)
         body = _cut_shapes(_fuse_shapes([body] + tabs) if tabs else body, slots)
 
+    # ------------------------------------------------------------------
+    # 5. Screw-joint through-holes at cut faces
+    # ------------------------------------------------------------------
+    # Each enabled cut line gets a vertical cylindrical hole drilled through
+    # the bridge material on EACH SIDE of the cut.  The two holes sit at
+    # symmetric positions about the cut (one per adjacent piece) so that
+    # when the pieces are assembled the holes are accessible from the top
+    # and a screw through both holes (with a heat-set insert in one) locks
+    # the pieces together.
+    if screw_joint and screw_hole_diameter > _GEOM_EPS:
+        body = _apply_screw_joint_holes(
+            body, x0, x1, y0, y1, height,
+            x_cuts, y_cuts,
+            joint_w,
+            screw_hole_diameter,
+            screw_joint_spacing,
+        )
+
     return body
 
 
@@ -2252,13 +2309,12 @@ def make_leg(
 
     Parameters
     ----------
-    leg_width    : side length of the square cross-section for both body and peg (mm)
-    leg_height   : height of the support column below the shelf (mm)
-    peg_depth    : height of the square tenon that enters the shelf blind hole (mm)
-    shelf_height : shelf panel height (mm).  When > 0 a cylindrical through-pin
-                   of radius ``leg_width × PIN_RADIUS_RATIO`` is fused to the
-                   leg at its centre, running from the shoulder
-                   (z = leg_height) to the shelf top (z = leg_height + shelf_height).
+    leg_width             : side length of the square cross-section (mm).
+    leg_height            : height of the support column below the shelf (mm).
+    peg_depth             : height of the square tenon that enters the shelf
+                            blind hole (mm).
+    shelf_height          : shelf panel height (mm).  When > 0 a cylindrical
+                            through-pin is added to the leg centre.
     """
     import FreeCAD as App
     import Part
@@ -2285,6 +2341,163 @@ def make_leg(
 
 
 # ---------------------------------------------------------------------------
+# Screw-joint hole helpers
+# ---------------------------------------------------------------------------
+
+_SCREW_HOLE_MAX_COUNT = 1000  # safety cap on holes per cut face
+
+
+def screw_lug_positions(
+    edge_start: float,
+    edge_end: float,
+    spacing: float,
+) -> list:
+    """Return evenly-spaced centre positions along an edge.
+
+    Used to place screw-joint through-holes at regular intervals along a
+    cut face (or any linear span).
+
+    Parameters
+    ----------
+    edge_start, edge_end : start and end coordinates of the span (mm).
+    spacing              : distance between centres (mm).  When ``<= 0``
+                           a single position is placed at the midpoint.
+
+    Returns
+    -------
+    list of float
+        Sorted positions within ``[edge_start, edge_end]``.
+        Returns an empty list when ``edge_end <= edge_start``.
+    """
+    edge_len = edge_end - edge_start
+    if edge_len <= _GEOM_EPS:
+        return []
+    if spacing <= _GEOM_EPS:
+        return [(edge_start + edge_end) * 0.5]
+    n = min(_SCREW_HOLE_MAX_COUNT, max(1, int(edge_len // spacing)))
+    total_span = (n - 1) * spacing if n > 1 else 0.0
+    start = edge_start + (edge_len - total_span) * 0.5
+    return [start + i * spacing for i in range(n)]
+
+
+def _apply_screw_joint_holes(
+    body,
+    x0: float, x1: float,
+    y0: float, y1: float,
+    height: float,
+    x_cuts: list,
+    y_cuts: list,
+    joint_w: float,
+    hole_diam: float,
+    spacing: float,
+):
+    """Drill horizontal screw-joint through-holes in the bridge material.
+
+    For each cut line that this piece borders, a **horizontal** cylindrical
+    hole of diameter *hole_diam* is drilled **perpendicular to the cut face**
+    through this piece's bridge material — entering at the joint face and
+    exiting at the outer edge of the bridge band.
+
+    Both adjacent pieces receive coaxial holes at the **same** position along
+    the joint face (same ``Z = height / 2``, same coordinate along the face).
+    When assembled, the two holes form a continuous channel: a screw inserted
+    from the outer face of one bridge travels through the channel and threads
+    into a heat-set insert in the other piece's bridge, locking the joint.
+
+    Alignment guarantee
+    ~~~~~~~~~~~~~~~~~~~
+    For an X-cut at ``xc``:
+
+    * Left piece  (``x1 == xc``): horizontal hole ``xc − bridge_half → xc``
+      in the +X direction, at ``(yp, height/2)``.
+    * Right piece (``x0 == xc``): horizontal hole ``xc → xc + bridge_half``
+      in the +X direction, at the **same** ``(yp, height/2)``.
+
+    Both pieces use the same *y* positions (computed from their shared Y span)
+    and the same ``height/2`` — so the holes are perfectly coaxial.
+
+    Parameters
+    ----------
+    body          : Part.Shape — the piece body to cut into.
+    x0 … y1      : bounds of this piece (mm).
+    height        : piece height in Z (mm).
+    x_cuts        : list of X-cut positions.
+    y_cuts        : list of Y-cut positions.
+    joint_w       : bridge width (mm).  Each piece has ``joint_w / 2`` mm of
+                    bridge material on its side of the cut; the hole spans
+                    this full half-width.
+    hole_diam     : screw hole diameter (mm).
+    spacing       : hole spacing along the cut face (mm; 0 = midpoint only).
+
+    Returns
+    -------
+    Part.Shape — the modified body with screw holes cut.
+    """
+    import FreeCAD as App
+    import Part
+
+    hole_r      = hole_diam * 0.5
+    bridge_half = joint_w / 2.0   # depth of hole into each piece's bridge
+    z_center    = height / 2.0    # holes are horizontal, centred in Z
+
+    cutters = []
+
+    # ── X-cuts (joint face perpendicular to X-axis at x = xc) ─────────────
+    for xc in x_cuts:
+        y_positions = screw_lug_positions(y0, y1, spacing)
+
+        # Left piece (right face at x = xc):
+        # horizontal hole entering the bridge at the joint face, going into -X.
+        if abs(x1 - xc) < _GEOM_EPS:
+            for yp in y_positions:
+                cutters.append(Part.makeCylinder(
+                    hole_r, bridge_half,
+                    App.Vector(xc - bridge_half, yp, z_center),
+                    App.Vector(1.0, 0.0, 0.0),
+                ))
+
+        # Right piece (left face at x = xc):
+        # horizontal hole entering the bridge at the joint face, going into +X.
+        if abs(x0 - xc) < _GEOM_EPS:
+            for yp in y_positions:
+                cutters.append(Part.makeCylinder(
+                    hole_r, bridge_half,
+                    App.Vector(xc, yp, z_center),
+                    App.Vector(1.0, 0.0, 0.0),
+                ))
+
+    # ── Y-cuts (joint face perpendicular to Y-axis at y = yc) ─────────────
+    for yc in y_cuts:
+        x_positions = screw_lug_positions(x0, x1, spacing)
+
+        # Bottom piece (top face at y = yc):
+        # horizontal hole entering the bridge at the joint face, going into -Y.
+        if abs(y1 - yc) < _GEOM_EPS:
+            for xp in x_positions:
+                cutters.append(Part.makeCylinder(
+                    hole_r, bridge_half,
+                    App.Vector(xp, yc - bridge_half, z_center),
+                    App.Vector(0.0, 1.0, 0.0),
+                ))
+
+        # Top piece (bottom face at y = yc):
+        # horizontal hole entering the bridge at the joint face, going into +Y.
+        if abs(y0 - yc) < _GEOM_EPS:
+            for xp in x_positions:
+                cutters.append(Part.makeCylinder(
+                    hole_r, bridge_half,
+                    App.Vector(xp, yc, z_center),
+                    App.Vector(0.0, 1.0, 0.0),
+                ))
+
+    if cutters:
+        holes_union = _fuse_shapes(cutters)
+        body = body.cut(holes_union)
+
+    return body
+
+
+# ---------------------------------------------------------------------------
 # Top-level entry points
 # ---------------------------------------------------------------------------
 
@@ -2296,7 +2509,7 @@ def create_all_pieces(
     hex_size: float,
     wall_thickness: float = None,
     max_piece_size: float = MAX_PIECE_SIZE,
-    lattice_type: str = "hexagonal",
+    lattice_type: str = "solid",
     joint_width: float = None,
     finger_w: float = None,
     finger_spacing: float = 0.0,
@@ -2304,6 +2517,9 @@ def create_all_pieces(
     support_width: float = None,
     joint_depth: float = None,
     joint_style: str = "step",
+    screw_joint: bool = False,
+    screw_hole_diameter: float = 3.5,
+    screw_joint_spacing: float = 0.0,
 ) -> list:
     """Create all interlocking pieces for a lattice flat panel.
 
@@ -2341,6 +2557,13 @@ def create_all_pieces(
                             piece (mm).  ``None`` → ``joint_width / 3``.
     joint_style           : ``'step'`` (default) — alternating stepped shelf
                             joints.  ``'taper'`` — legacy tapered box joints.
+    screw_joint           : when ``True`` horizontal through-holes are drilled
+                            perpendicular to every cut face in the bridge
+                            material.  Adjacent pieces get coaxial holes that
+                            form a continuous channel when assembled.
+    screw_hole_diameter   : diameter of each horizontal screw hole (mm).
+    screw_joint_spacing   : hole spacing along each joint face (mm).
+                            ``0`` (default) places one hole at the midpoint.
 
     Returns
     -------
@@ -2375,6 +2598,9 @@ def create_all_pieces(
                 support_width=support_width,
                 joint_depth=joint_depth,
                 joint_style=joint_style,
+                screw_joint=screw_joint,
+                screw_hole_diameter=screw_hole_diameter,
+                screw_joint_spacing=screw_joint_spacing,
             )
             pieces.append((f"Piece_{ix}_{iy}", shape))
 
@@ -2391,7 +2617,7 @@ def create_shelf_with_legs(
     max_piece_size: float = MAX_PIECE_SIZE,
     leg_height: float = 100.0,
     leg_width: float = 20.0,
-    lattice_type: str = "hexagonal",
+    lattice_type: str = "solid",
     joint_width: float = None,
     finger_w: float = None,
     finger_spacing: float = 0.0,
@@ -2399,6 +2625,9 @@ def create_shelf_with_legs(
     support_width: float = None,
     joint_depth: float = None,
     joint_style: str = "step",
+    screw_joint: bool = False,
+    screw_joint_spacing: float = 0.0,
+    screw_hole_diameter: float = 3.5,
 ) -> list:
     """Create all interlocking shelf pieces plus four individual corner legs.
 
@@ -2418,41 +2647,46 @@ def create_shelf_with_legs(
                                 │  │  ← peg (top of leg, inside shelf)
         z = -leg_height     ────┴──┘── bottom of leg
 
+    Screw-joint holes
+    ~~~~~~~~~~~~~~~~~
+    When *screw_joint* is enabled, vertical cylindrical through-holes are
+    drilled in the bridge material on **each side** of every cut line.
+    The two holes (one per adjacent piece) sit side-by-side when the pieces
+    are assembled so a screw inserted from the top locks them together.
+    See :func:`make_piece` for the full geometry description.
+
     Parameters
     ----------
     width, length, height : overall shelf panel dimensions (mm)
-    perim_width           : solid **outer** perimeter width (mm).  Controls the
-                            four frame strips at the panel edges.
-    hex_size              : cell side length (mm).  Named ``hex_size`` for
-                            backward compatibility; applies to any tiling.
+    perim_width           : solid **outer** perimeter width (mm).
+    hex_size              : cell side length (mm).
     wall_thickness        : minimum wall between cells (mm).
                             Defaults to ``max(1.2, hex_size * 0.15)``.
     max_piece_size        : maximum printable piece size (mm)
     leg_height            : height of the support column below the shelf (mm)
     leg_width             : side length of the square leg / peg cross-section (mm).
-                            Must be less than ``perim_width`` so that the socket
-                            fits entirely within the solid perimeter band.
-    lattice_type          : one of the keys in :data:`LATTICE_TYPES`
-                            (default ``"hexagonal"``).
-    joint_width           : **bridge** width (mm) — the solid-line width of the
-                            joint zone.  Controls bridge-band half-width at cut
-                            lines.  Defaults to *perim_width*.
-    finger_w              : **tab / finger width** (mm) — the width of each
-                            individual finger tab along the cut face.
-                            Independent of *joint_width*; defaults to
-                            *joint_width* when ``None``.
-    finger_spacing        : gap between consecutive fingers (mm).  ``0``
-                            (default) places fingers contiguously (full face).
-                            When > 0, N centred fingers are placed with
-                            *finger_spacing* flat gaps between them.
-    support_spacing       : spacing between interior support bars (mm).
-                            ``0`` (default) disables support bars.
-    support_width         : full width of each interior support bar (mm).
-                            Defaults to *joint_width*.
-    joint_depth           : how far each finger tab penetrates into the adjacent
-                            piece (mm).  ``None`` → ``joint_width / 3``.
-    joint_style           : ``'step'`` (default) — alternating stepped shelf
-                            joints.  ``'taper'`` — legacy tapered box joints.
+    lattice_type          : one of the keys in :data:`LATTICE_TYPES`.
+    joint_width           : bridge width (mm).  Defaults to *perim_width*.
+    finger_w              : tab / finger width (mm).
+    finger_spacing        : gap between consecutive fingers (mm).  ``0`` =
+                            contiguous.
+    support_spacing       : interior support bar spacing (mm).  ``0`` =
+                            disabled.
+    support_width         : support bar width (mm).  Defaults to *joint_width*.
+    joint_depth           : finger penetration depth (mm).
+                            ``None`` → ``joint_width / 3``.
+    joint_style           : ``'step'`` (default) or ``'taper'``.
+    screw_joint           : when ``True`` horizontal through-holes are drilled
+                            perpendicular to every cut face in the bridge
+                            material.  Adjacent pieces get coaxial holes that
+                            form a continuous channel when assembled — insert a
+                            heat-set insert in one piece and thread a screw
+                            through from the other side.
+    screw_joint_spacing   : hole spacing along each joint face (mm).
+                            ``0`` (default) places one hole at the midpoint.
+    screw_hole_diameter   : diameter of each horizontal screw hole (mm).
+                            Same diameter on both sides of every joint.
+                            Default 3.5 mm.
 
     Returns
     -------
@@ -2460,9 +2694,7 @@ def create_shelf_with_legs(
         Shelf pieces are named ``Piece_X_Y`` with identity placement;
         legs are named ``Leg_0_BottomLeft`` … ``Leg_3_TopRight`` with a
         placement vector that positions each leg flush with the nearest shelf
-        corner (body below the shelf, peg inside the blind socket).
-        Callers should apply ``obj.Placement = App.Placement(placement,
-        App.Rotation())`` when adding objects to the document.
+        corner.
     """
     _require_freecad()
     import FreeCAD as App
@@ -2492,8 +2724,6 @@ def create_shelf_with_legs(
     ]
 
     # Leg exclusion zones: the full square footprint of each leg.
-    # Hex cells whose bounding circle overlaps a zone are suppressed so
-    # that the solid leg-corner material is never interrupted by a hex hole.
     leg_zones = [
         (px, py, px + leg_width, py + leg_width)
         for px, py, _pz in placements
@@ -2512,8 +2742,7 @@ def create_shelf_with_legs(
             )
         )
 
-    # Cylindrical through-hole cutters: full shelf height, centred on each
-    # leg's round through-pin.  Slightly wider than the pin for a clearance fit.
+    # Cylindrical through-hole cutters for the round through-pin.
     pin_radius      = leg_width * PIN_RADIUS_RATIO
     pin_hole_radius = pin_radius + FIT_CLEARANCE * 0.5
     pin_hole_cutters = []
@@ -2529,7 +2758,6 @@ def create_shelf_with_legs(
 
     # ------------------------------------------------------------------
     # Build shelf pieces and cut blind sockets where they overlap.
-    # Shelf pieces carry an identity placement (origin unchanged).
     # ------------------------------------------------------------------
     results = []
     for ix, (x0, x1) in enumerate(zip(x_bounds[:-1], x_bounds[1:])):
@@ -2550,6 +2778,9 @@ def create_shelf_with_legs(
                 support_width=support_width,
                 joint_depth=joint_depth,
                 joint_style=joint_style,
+                screw_joint=screw_joint,
+                screw_hole_diameter=screw_hole_diameter,
+                screw_joint_spacing=screw_joint_spacing,
             )
 
             # Cut blind sockets and round through-holes that intersect this piece
@@ -2570,15 +2801,6 @@ def create_shelf_with_legs(
 
     # ------------------------------------------------------------------
     # Build legs at the local origin; placement applied by the caller.
-    #
-    # Leg geometry (print orientation, base at z = 0):
-    #   body column     z = 0 … leg_height
-    #   square tenon    z = leg_height … leg_height + peg_depth
-    #   round through-pin z = leg_height … leg_height + height (flush with shelf top)
-    #
-    # Placement vector shifts z = 0 of the leg to z = -leg_height in world
-    # space (shoulder sits at shelf bottom face), so the tenon protrudes into
-    # the blind socket and the round pin rises through the full shelf height.
     # ------------------------------------------------------------------
     corner_labels = ["BottomLeft", "BottomRight", "TopLeft", "TopRight"]
     for i, (label, (px, py, pz)) in enumerate(zip(corner_labels, placements)):

@@ -105,24 +105,54 @@ class HexLatticeDialog(QtWidgets.QDialog):
         form.addRow("Wall thickness:",              self.wall_spin)
         form.addRow("Max piece size:",              self.max_piece_spin)
 
+        # ── Screw joints ───────────────────────────────────────────────
+        # A vertical screw through-hole is drilled in the bridge material
+        # on each side of every joint cut line.  When assembled, the two
+        # holes (one per adjacent piece) sit side-by-side across the joint
+        # so a screw locks them together with a heat-set insert in one hole.
+        self.screw_joint_check = QtWidgets.QCheckBox("Add screw through-holes at joints")
+        self.screw_joint_check.setChecked(False)
+
+        self.screw_hole_diameter_spin  = _spin(1.0,  20.0, 3.5, dec=2)
+        self.screw_joint_spacing_spin  = _spin(0.0, 5000.0, 0.0)
+        self.screw_joint_spacing_spin.setSpecialValueText("One hole at midpoint of each face")
+
+        for w in (self.screw_hole_diameter_spin, self.screw_joint_spacing_spin):
+            w.setEnabled(False)
+        self.screw_joint_check.toggled.connect(self.screw_hole_diameter_spin.setEnabled)
+        self.screw_joint_check.toggled.connect(self.screw_joint_spacing_spin.setEnabled)
+
+        screw_grid = QtWidgets.QGridLayout()
+        screw_grid.addWidget(self.screw_joint_check,                            0, 0, 1, 4)
+        screw_grid.addWidget(QtWidgets.QLabel("  Hole diameter:"),              1, 0)
+        screw_grid.addWidget(self.screw_hole_diameter_spin,                     1, 1)
+        screw_grid.addWidget(QtWidgets.QLabel("  Hole spacing\n  (0 = midpoint):"), 1, 2)
+        screw_grid.addWidget(self.screw_joint_spacing_spin,                     1, 3)
+        form.addRow("Screw joints:", screw_grid)
+
         # Info label (exposed as self._info_label so subclasses can update text)
         self._info_label = QtWidgets.QLabel(
             "<i>Parts wider/longer than <b>Max piece size</b> are automatically\n"
             "sliced into interlocking finger-joint pieces for 3-D printing.\n"
+            "<b>Lattice type</b>: <b>Solid</b> (default) produces a plain flat "
+            "sheet — ideal for quick checks.  Switch to a patterned type to add "
+            "the lattice holes. "
             "<b>Bridge width</b> sets the width (mm) of the solid zone on each "
             "side of every cut line (defaults to Perimeter width when 0). "
             "<b>Tab/finger width</b> sets the width of each individual finger "
-            "tab along the cut face — independent of Bridge width (0 = same as "
-            "Bridge width). "
+            "tab along the cut face (0 = same as Bridge width). "
             "<b>Finger spacing</b> sets the gap (mm) between consecutive fingers "
-            "— areas between fingers are flat. 0 means fingers are contiguous "
-            "(no gap, fills the full face). "
-            "<b>Joint depth</b> controls how far each finger penetrates into the "
-            "adjacent piece: should be less than half of Bridge width to leave "
-            "solid backing behind the slot "
-            "(0 = one-third of bridge width). "
+            "— 0 means fingers are contiguous (no gap). "
+            "<b>Joint depth</b> controls how far each finger penetrates (0 = "
+            "one-third of bridge width). "
             "<b>Support bar spacing</b> adds internal solid ribs every N mm in "
-            "both X and Y for extra rigidity (0 = no ribs).</i>"
+            "both X and Y (0 = no ribs). "
+            "<b>Screw joints</b>: when enabled, a horizontal through-hole is "
+            "drilled perpendicular to every joint cut face, centred at "
+            "half the piece height.  Adjacent pieces get coaxial holes that "
+            "form a continuous channel when assembled — insert a heat-set "
+            "insert in one piece and drive a screw from the other side to "
+            "lock the joint without interfering with the finger tabs.</i>"
         )
         self._info_label.setWordWrap(True)
 
@@ -146,36 +176,45 @@ class HexLatticeDialog(QtWidgets.QDialog):
         joint_d  = self.joint_depth_spin.value()
         sup_w    = self.support_width_spin.value()
         return {
-            "width":            self.width_spin.value(),
-            "length":           self.length_spin.value(),
-            "height":           self.height_spin.value(),
-            "perim_width":      self.perim_spin.value(),
+            "width":                self.width_spin.value(),
+            "length":               self.length_spin.value(),
+            "height":               self.height_spin.value(),
+            "perim_width":          self.perim_spin.value(),
             # joint_width=None tells make_piece() to fall back to perim_width
-            "joint_width":      joint_w if joint_w > 0.0 else None,
+            "joint_width":          joint_w if joint_w > 0.0 else None,
             # finger_w=None tells make_piece() to fall back to joint_width
-            "finger_w":         tab_w if tab_w > 0.0 else None,
-            "finger_spacing":   self.finger_spacing_spin.value(),
+            "finger_w":             tab_w if tab_w > 0.0 else None,
+            "finger_spacing":       self.finger_spacing_spin.value(),
             # joint_depth=None tells make_piece() to fall back to joint_w/3
-            "joint_depth":      joint_d if joint_d > 0.0 else None,
-            "support_spacing":  self.support_spacing_spin.value(),
+            "joint_depth":          joint_d if joint_d > 0.0 else None,
+            "support_spacing":      self.support_spacing_spin.value(),
             # support_width=None tells make_piece() to fall back to joint_w
-            "support_width":    sup_w if sup_w > 0.0 else None,
-            "hex_size":         self.hex_spin.value(),
-            "wall_thickness":   self.wall_spin.value(),
-            "max_piece_size":   self.max_piece_spin.value(),
-            "lattice_type":     self.lattice_combo.currentData(),
+            "support_width":        sup_w if sup_w > 0.0 else None,
+            "hex_size":             self.hex_spin.value(),
+            "wall_thickness":       self.wall_spin.value(),
+            "max_piece_size":       self.max_piece_spin.value(),
+            "lattice_type":         self.lattice_combo.currentData(),
+            "screw_joint":          self.screw_joint_check.isChecked(),
+            "screw_hole_diameter":  self.screw_hole_diameter_spin.value(),
+            "screw_joint_spacing":  self.screw_joint_spacing_spin.value(),
         }
 
 
 class ShelfWithLegsDialog(HexLatticeDialog):
     """Modal dialog for shelf-with-legs creation parameters.
 
-    Extends :class:`HexLatticeDialog` with two additional fields:
+    Extends :class:`HexLatticeDialog` with additional fields for:
 
     * **Leg height** – total printed height of each corner leg.
     * **Leg width** – side length of the square leg cross-section.
       Must be smaller than the perimeter width so the corner holes fit
       entirely within the solid perimeter band.
+
+    The screw joint controls (enable checkbox, hole diameter, hole spacing)
+    are inherited from the base dialog and apply to both the flat-panel and
+    shelf modes.  When enabled, a vertical through-hole is drilled in the
+    bridge material on **each side** of every joint cut line so adjacent
+    pieces can be locked together with a screw.
     """
 
     def __init__(self, parent=None):
@@ -196,27 +235,35 @@ class ShelfWithLegsDialog(HexLatticeDialog):
         self._form.addRow("Leg height:",                 self.leg_height_spin)
         self._form.addRow("Leg width\n(cross-section):", self.leg_width_spin)
 
-        # Update the shared info label text (avoids any duplicate-widget issues)
+        # Update the shared info label text
         self._info_label.setText(
             "<i>Parts wider/longer than <b>Max piece size</b> are automatically "
             "sliced into interlocking finger-joint pieces for 3-D printing. "
+            "<b>Lattice type</b>: <b>Solid</b> (default) produces a plain flat "
+            "sheet. "
             "<b>Bridge width</b> controls the solid band at cut lines "
             "(defaults to Perimeter width when 0). "
             "<b>Tab/finger width</b> sets the width of each individual finger "
-            "tab along the cut face (0 = same as Bridge width). "
-            "<b>Joint depth</b> controls how far each finger penetrates: smaller "
-            "values leave a solid base in the bridge band across the join "
-            "(0 = one-third of bridge width). "
+            "tab (0 = same as Bridge width). "
+            "<b>Joint depth</b> controls how far each finger penetrates (0 = "
+            "one-third of bridge width). "
             "<b>Support bar spacing</b> adds internal solid ribs every N mm (0 = none). "
             "<b>Leg width</b> must be smaller than <b>Perimeter width</b> so "
             "that the corner holes fit within the solid perimeter band. "
-            "The top of each leg is a peg that inserts into a blind hole in "
-            "the shelf; the leg body rests below the shelf.</i>"
+            "<b>Screw joints</b>: when enabled, a horizontal through-hole is "
+            "drilled perpendicular to every joint cut face, centred at half "
+            "the piece height.  Adjacent pieces get coaxial holes forming a "
+            "continuous channel when assembled — insert a heat-set insert in "
+            "one piece and drive a screw from the other side. "
+            "<b>Hole diameter</b> sets the screw/insert hole size. "
+            "<b>Hole spacing</b> controls how many holes appear along each joint "
+            "face: 0 places one hole at the midpoint; a positive value places "
+            "holes at that centre-to-centre interval.</i>"
         )
 
     # ------------------------------------------------------------------
     def get_params(self) -> dict:
-        """Return dialog values including leg dimensions."""
+        """Return dialog values including leg parameters."""
         params = super().get_params()
         params["leg_height"] = self.leg_height_spin.value()
         params["leg_width"]  = self.leg_width_spin.value()

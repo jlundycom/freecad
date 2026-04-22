@@ -34,6 +34,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     _x_joint_y_extents,
     LATTICE_TYPES,
     get_tiling_provider,
+    SolidTilingProvider,
     HexagonalTilingProvider,
     SquareTilingProvider,
     TriangularTilingProvider,
@@ -46,6 +47,7 @@ from freecad.HexLatticeMaker.hex_lattice_core import (
     GreatRhombitrihexagonalTilingProvider,
     SnubHexagonalTilingProvider,
     _step_joint_z_extents,
+    screw_lug_positions,
 )
 
 import pytest
@@ -1028,31 +1030,37 @@ _SPACING_RTOL = 0.01
 class TestLatticeTypes:
     """Tests for the LATTICE_TYPES registry and get_tiling_provider factory."""
 
-    def test_lattice_types_has_eleven_entries(self):
-        assert len(LATTICE_TYPES) == 11
+    def test_lattice_types_has_twelve_entries(self):
+        assert len(LATTICE_TYPES) == 12
 
     def test_required_keys_present(self):
-        for key in ("hexagonal", "square", "triangular", "trihexagonal",
+        for key in ("solid", "hexagonal", "square", "triangular", "trihexagonal",
                     "truncated_square", "snub_square", "elongated_triangular",
                     "truncated_hexagonal", "small_rhombitrihexagonal",
                     "great_rhombitrihexagonal", "snub_hexagonal"):
             assert key in LATTICE_TYPES, f"Missing key {key!r}"
+
+    def test_solid_is_first_entry(self):
+        assert list(LATTICE_TYPES.keys())[0] == "solid", (
+            "'solid' should be the first entry so it is the default in the UI"
+        )
 
     def test_all_display_names_are_strings(self):
         for key, name in LATTICE_TYPES.items():
             assert isinstance(name, str) and name, f"Bad display name for {key!r}"
 
     def test_get_tiling_provider_returns_correct_types(self):
-        assert isinstance(get_tiling_provider("hexagonal"),                 HexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("square"),                    SquareTilingProvider)
-        assert isinstance(get_tiling_provider("triangular"),                TriangularTilingProvider)
-        assert isinstance(get_tiling_provider("trihexagonal"),              TrihexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("truncated_square"),          TruncatedSquareTilingProvider)
-        assert isinstance(get_tiling_provider("snub_square"),               SnubSquareTilingProvider)
-        assert isinstance(get_tiling_provider("elongated_triangular"),      ElongatedTriangularTilingProvider)
-        assert isinstance(get_tiling_provider("truncated_hexagonal"),       TruncatedHexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("small_rhombitrihexagonal"),  SmallRhombitrihexagonalTilingProvider)
-        assert isinstance(get_tiling_provider("great_rhombitrihexagonal"),  GreatRhombitrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("solid"),                      SolidTilingProvider)
+        assert isinstance(get_tiling_provider("hexagonal"),                  HexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("square"),                     SquareTilingProvider)
+        assert isinstance(get_tiling_provider("triangular"),                 TriangularTilingProvider)
+        assert isinstance(get_tiling_provider("trihexagonal"),               TrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_square"),           TruncatedSquareTilingProvider)
+        assert isinstance(get_tiling_provider("snub_square"),                SnubSquareTilingProvider)
+        assert isinstance(get_tiling_provider("elongated_triangular"),       ElongatedTriangularTilingProvider)
+        assert isinstance(get_tiling_provider("truncated_hexagonal"),        TruncatedHexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("small_rhombitrihexagonal"),   SmallRhombitrihexagonalTilingProvider)
+        assert isinstance(get_tiling_provider("great_rhombitrihexagonal"),   GreatRhombitrihexagonalTilingProvider)
         assert isinstance(get_tiling_provider("snub_hexagonal"),             SnubHexagonalTilingProvider)
 
     def test_get_tiling_provider_unknown_key_raises(self):
@@ -1086,6 +1094,14 @@ class TestTilingCells:
 
     def test_hexagonal_non_empty(self):
         assert len(self._cells("hexagonal")) > 0
+
+    def test_solid_returns_no_cells(self):
+        """Solid tiling has no holes — get_cells() must always return []."""
+        assert self._cells("solid") == []
+
+    def test_solid_cell_circumradius_is_zero(self):
+        p = get_tiling_provider("solid")
+        assert p.cell_circumradius(8.0) == 0.0
 
     def test_square_non_empty(self):
         assert len(self._cells("square")) > 0
@@ -2224,9 +2240,12 @@ class TestFullRegionTiling:
     def test_cells_generated_inside_perimeter_zone(self, key):
         """get_cells() with full bounds must return at least one cell whose
         centre falls within the perimeter band (within perim_w of an edge).
+        Skipped for 'solid' which intentionally produces no cells.
         """
         p = get_tiling_provider(key)
         cells = p.get_cells(0.0, self._W, 0.0, self._L, self._CELL, self._WALL)
+        if not cells:
+            pytest.skip(f"Tiling {key!r} produces no cells (solid/empty pattern)")
         perim = self._PERIM
         W, L  = self._W, self._L
 
@@ -2243,12 +2262,15 @@ class TestFullRegionTiling:
     def test_full_region_produces_more_cells_than_interior(self, key):
         """Full-bounds get_cells() must return strictly more cells than the
         interior-only call (because the perimeter zone is now included).
+        Skipped for 'solid' which intentionally produces no cells.
         """
         p = get_tiling_provider(key)
         perim = self._PERIM
         W, L  = self._W, self._L
 
         cells_full     = p.get_cells(0.0, W, 0.0, L, self._CELL, self._WALL)
+        if not cells_full:
+            pytest.skip(f"Tiling {key!r} produces no cells (solid/empty pattern)")
         cells_interior = p.get_cells(perim, W - perim, perim, L - perim,
                                      self._CELL, self._WALL)
 
@@ -2817,3 +2839,113 @@ class TestDialogJointDepthKey:
         """joint_depth key must be present in the returned dict."""
         params = self._simulate_get_params()
         assert "joint_depth" in params
+
+
+# ===========================================================================
+# screw_lug_positions
+# ===========================================================================
+
+class TestScrewLugPositions:
+    """Tests for the pure-Python ``screw_lug_positions`` helper.
+
+    All tests are pure Python (no FreeCAD required).
+    """
+
+    # ── degenerate / trivial cases ────────────────────────────────────────
+
+    def test_empty_edge_returns_empty_list(self):
+        """edge_end <= edge_start → no positions."""
+        assert screw_lug_positions(50.0, 50.0, 10.0) == []
+        assert screw_lug_positions(60.0, 40.0, 10.0) == []
+
+    def test_zero_spacing_returns_midpoint(self):
+        """spacing == 0 → single lug at the midpoint of the edge."""
+        pos = screw_lug_positions(0.0, 100.0, 0.0)
+        assert len(pos) == 1
+        assert abs(pos[0] - 50.0) < 1e-9
+
+    def test_negative_spacing_returns_midpoint(self):
+        """spacing < 0 is treated the same as spacing == 0 (midpoint only)."""
+        pos = screw_lug_positions(20.0, 80.0, -5.0)
+        assert len(pos) == 1
+        assert abs(pos[0] - 50.0) < 1e-9
+
+    # ── count of positions ────────────────────────────────────────────────
+
+    def test_spacing_larger_than_edge_gives_one_lug(self):
+        """Spacing > edge length → single lug at midpoint."""
+        pos = screw_lug_positions(0.0, 30.0, 50.0)
+        assert len(pos) == 1
+        assert abs(pos[0] - 15.0) < 1e-9
+
+    def test_spacing_exactly_half_edge_gives_two_lugs(self):
+        """spacing = edge_len / 2 → 2 lugs."""
+        pos = screw_lug_positions(0.0, 100.0, 50.0)
+        assert len(pos) == 2
+
+    def test_spacing_gives_correct_count(self):
+        """3 lugs for spacing=30 on 100 mm edge (floor(100/30)=3)."""
+        pos = screw_lug_positions(0.0, 100.0, 30.0)
+        assert len(pos) == 3
+
+    # ── positions are sorted and within bounds ────────────────────────────
+
+    def test_positions_are_sorted(self):
+        pos = screw_lug_positions(0.0, 200.0, 40.0)
+        assert pos == sorted(pos)
+
+    def test_all_positions_within_edge(self):
+        start, end = 10.0, 190.0
+        for spacing in (20.0, 35.0, 50.0, 80.0):
+            for p in screw_lug_positions(start, end, spacing):
+                assert start - 1e-9 <= p <= end + 1e-9, (
+                    f"position {p} outside [{start}, {end}] for spacing={spacing}"
+                )
+
+    # ── centring property ─────────────────────────────────────────────────
+
+    def test_single_lug_always_at_midpoint_regardless_of_spacing(self):
+        """Whenever only one lug is produced it should be at the midpoint."""
+        for spacing in (0.0, 999.0, 1e6):
+            pos = screw_lug_positions(20.0, 80.0, spacing)
+            if len(pos) == 1:
+                assert abs(pos[0] - 50.0) < 1e-9
+
+    def test_two_lugs_symmetric_about_midpoint(self):
+        """Two lugs must be symmetric about the edge midpoint."""
+        pos = screw_lug_positions(0.0, 100.0, 50.0)
+        assert len(pos) == 2
+        mid = 50.0
+        assert abs(pos[0] + pos[1] - 2 * mid) < 1e-9
+
+    def test_three_lugs_symmetric_about_midpoint(self):
+        pos = screw_lug_positions(0.0, 90.0, 30.0)
+        assert len(pos) == 3
+        mid = 45.0
+        assert abs(pos[0] + pos[2] - 2 * mid) < 1e-9
+        assert abs(pos[1] - mid) < 1e-9
+
+    # ── spacing between adjacent positions ────────────────────────────────
+
+    def test_adjacent_lugs_spaced_by_given_spacing(self):
+        """Consecutive lug centres must be exactly `spacing` apart."""
+        spacing = 25.0
+        pos = screw_lug_positions(0.0, 200.0, spacing)
+        for a, b in zip(pos[:-1], pos[1:]):
+            assert abs(b - a - spacing) < 1e-9
+
+    def test_spacing_respected_for_non_zero_start(self):
+        """Spacing invariant holds for edges not starting at zero."""
+        spacing = 20.0
+        pos = screw_lug_positions(15.0, 115.0, spacing)
+        for a, b in zip(pos[:-1], pos[1:]):
+            assert abs(b - a - spacing) < 1e-9
+
+    # ── edge cases ────────────────────────────────────────────────────────
+
+    def test_returns_list_type(self):
+        assert isinstance(screw_lug_positions(0.0, 100.0, 25.0), list)
+
+    def test_all_elements_are_floats(self):
+        for p in screw_lug_positions(0.0, 100.0, 30.0):
+            assert isinstance(p, float)
