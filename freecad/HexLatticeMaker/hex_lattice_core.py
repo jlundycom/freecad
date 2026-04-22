@@ -2049,20 +2049,20 @@ def make_piece(
     joint_style    : ``'step'`` (default) — alternating stepped shelf joints
                      that lock assembled pieces against vertical movement.
                      ``'taper'`` — legacy tapered box joints (draft angle in Z).
-    screw_joint    : when ``True``, vertical cylindrical through-holes are
-                     drilled in the bridge material on **each side** of every
-                     cut line.  One hole in each adjacent piece — when the
-                     pieces are assembled the two holes sit side-by-side
-                     across the joint so a screw (with a heat-set insert in
-                     one piece and a clearance hole in the other) locks them
-                     together.
-    screw_hole_diameter : diameter of each screw through-hole (mm).  The same
-                     diameter is used on both sides of every joint, so the
-                     same drill / heat-set insert size is used throughout.
-    screw_joint_spacing : centre-to-centre spacing between screw holes along
-                     each joint face (mm).  ``0`` (default) places a single
-                     hole at the midpoint of the face; a positive value places
-                     holes at that interval, centred on the face.
+    screw_joint    : when ``True``, **horizontal** cylindrical through-holes
+                     are drilled perpendicular to every cut face, entering
+                     from the joint face and exiting at the outer edge of the
+                     bridge band (depth = ``joint_w / 2``).  Both adjacent
+                     pieces get a coaxial hole at ``Z = height / 2`` and the
+                     same position along the face, so when assembled the two
+                     holes form a continuous channel.  A screw from the outer
+                     face of one bridge travels through and threads into a
+                     heat-set insert in the other piece.
+    screw_hole_diameter : diameter of each screw through-hole (mm).
+    screw_joint_spacing : centre-to-centre spacing between holes along each
+                     joint face (mm).  ``0`` (default) places one hole at the
+                     midpoint of the face; a positive value places holes at
+                     that interval, centred on the face.
     """
     import FreeCAD as App
     import Part
@@ -2344,10 +2344,7 @@ def make_leg(
 # Screw-joint hole helpers
 # ---------------------------------------------------------------------------
 
-_SCREW_HOLE_MAX_COUNT    = 1000   # safety cap on holes per cut face
-_SCREW_HOLE_OFFSET_DIV   = 4.0    # hole offset = joint_w / this value
-                                   # (places hole at the mid-point of the
-                                   #  bridge half-width on each side of cut)
+_SCREW_HOLE_MAX_COUNT = 1000  # safety cap on holes per cut face
 
 
 def screw_lug_positions(
@@ -2394,30 +2391,43 @@ def _apply_screw_joint_holes(
     hole_diam: float,
     spacing: float,
 ):
-    """Drill vertical screw-joint through-holes in the bridge material.
+    """Drill horizontal screw-joint through-holes in the bridge material.
 
-    For each cut line that this piece borders, a vertical cylindrical
-    through-hole of diameter *hole_diam* is drilled through the **full
-    height** of the piece at the bridge material — one hole on each side
-    of the cut.  The hole centre is placed at ``joint_w / 4`` from the cut
-    face, which puts it in the middle of the bridge half-width.
+    For each cut line that this piece borders, a **horizontal** cylindrical
+    hole of diameter *hole_diam* is drilled **perpendicular to the cut face**
+    through this piece's bridge material — entering at the joint face and
+    exiting at the outer edge of the bridge band.
 
-    When two adjacent pieces are assembled, their respective holes sit
-    side-by-side across the joint.  A screw inserted vertically from the
-    top (or bottom) passes through one hole and is secured by a heat-set
-    insert in the other, creating a strong mechanical connection.
+    Both adjacent pieces receive coaxial holes at the **same** position along
+    the joint face (same ``Z = height / 2``, same coordinate along the face).
+    When assembled, the two holes form a continuous channel: a screw inserted
+    from the outer face of one bridge travels through the channel and threads
+    into a heat-set insert in the other piece's bridge, locking the joint.
+
+    Alignment guarantee
+    ~~~~~~~~~~~~~~~~~~~
+    For an X-cut at ``xc``:
+
+    * Left piece  (``x1 == xc``): horizontal hole ``xc − bridge_half → xc``
+      in the +X direction, at ``(yp, height/2)``.
+    * Right piece (``x0 == xc``): horizontal hole ``xc → xc + bridge_half``
+      in the +X direction, at the **same** ``(yp, height/2)``.
+
+    Both pieces use the same *y* positions (computed from their shared Y span)
+    and the same ``height/2`` — so the holes are perfectly coaxial.
 
     Parameters
     ----------
-    body      : Part.Shape — the piece body to cut into.
-    x0 … y1  : bounds of this piece (mm).
-    height    : piece height in Z (mm) — holes run the full height.
-    x_cuts    : list of X-cut positions.
-    y_cuts    : list of Y-cut positions.
-    joint_w   : bridge width (mm).  ``joint_w / 4`` is used as the hole
-                offset from the cut face.
-    hole_diam : screw hole diameter (mm).
-    spacing   : hole spacing along the cut face (mm; 0 = midpoint only).
+    body          : Part.Shape — the piece body to cut into.
+    x0 … y1      : bounds of this piece (mm).
+    height        : piece height in Z (mm).
+    x_cuts        : list of X-cut positions.
+    y_cuts        : list of Y-cut positions.
+    joint_w       : bridge width (mm).  Each piece has ``joint_w / 2`` mm of
+                    bridge material on its side of the cut; the hole spans
+                    this full half-width.
+    hole_diam     : screw hole diameter (mm).
+    spacing       : hole spacing along the cut face (mm; 0 = midpoint only).
 
     Returns
     -------
@@ -2426,55 +2436,58 @@ def _apply_screw_joint_holes(
     import FreeCAD as App
     import Part
 
-    hole_r = hole_diam * 0.5
-    # Place hole centre at joint_w / _SCREW_HOLE_OFFSET_DIV from the cut face
-    # (mid-point of the bridge half-width on each side of the cut).
-    offset = joint_w / _SCREW_HOLE_OFFSET_DIV
+    hole_r      = hole_diam * 0.5
+    bridge_half = joint_w / 2.0   # depth of hole into each piece's bridge
+    z_center    = height / 2.0    # holes are horizontal, centred in Z
 
     cutters = []
 
-    # ── X-cuts (vertical faces at x = xc) ──────────────────────────────
+    # ── X-cuts (joint face perpendicular to X-axis at x = xc) ─────────────
     for xc in x_cuts:
         y_positions = screw_lug_positions(y0, y1, spacing)
 
-        # This piece is LEFT of this cut (right face at x = xc)
+        # Left piece (right face at x = xc):
+        # horizontal hole entering the bridge at the joint face, going into -X.
         if abs(x1 - xc) < _GEOM_EPS:
             for yp in y_positions:
                 cutters.append(Part.makeCylinder(
-                    hole_r, height,
-                    App.Vector(xc - offset, yp, 0.0),
-                    App.Vector(0.0, 0.0, 1.0),
+                    hole_r, bridge_half,
+                    App.Vector(xc - bridge_half, yp, z_center),
+                    App.Vector(1.0, 0.0, 0.0),
                 ))
 
-        # This piece is RIGHT of this cut (left face at x = xc)
+        # Right piece (left face at x = xc):
+        # horizontal hole entering the bridge at the joint face, going into +X.
         if abs(x0 - xc) < _GEOM_EPS:
             for yp in y_positions:
                 cutters.append(Part.makeCylinder(
-                    hole_r, height,
-                    App.Vector(xc + offset, yp, 0.0),
-                    App.Vector(0.0, 0.0, 1.0),
+                    hole_r, bridge_half,
+                    App.Vector(xc, yp, z_center),
+                    App.Vector(1.0, 0.0, 0.0),
                 ))
 
-    # ── Y-cuts (vertical faces at y = yc) ──────────────────────────────
+    # ── Y-cuts (joint face perpendicular to Y-axis at y = yc) ─────────────
     for yc in y_cuts:
         x_positions = screw_lug_positions(x0, x1, spacing)
 
-        # This piece is BELOW this cut (top face at y = yc)
+        # Bottom piece (top face at y = yc):
+        # horizontal hole entering the bridge at the joint face, going into -Y.
         if abs(y1 - yc) < _GEOM_EPS:
             for xp in x_positions:
                 cutters.append(Part.makeCylinder(
-                    hole_r, height,
-                    App.Vector(xp, yc - offset, 0.0),
-                    App.Vector(0.0, 0.0, 1.0),
+                    hole_r, bridge_half,
+                    App.Vector(xp, yc - bridge_half, z_center),
+                    App.Vector(0.0, 1.0, 0.0),
                 ))
 
-        # This piece is ABOVE this cut (bottom face at y = yc)
+        # Top piece (bottom face at y = yc):
+        # horizontal hole entering the bridge at the joint face, going into +Y.
         if abs(y0 - yc) < _GEOM_EPS:
             for xp in x_positions:
                 cutters.append(Part.makeCylinder(
-                    hole_r, height,
-                    App.Vector(xp, yc + offset, 0.0),
-                    App.Vector(0.0, 0.0, 1.0),
+                    hole_r, bridge_half,
+                    App.Vector(xp, yc, z_center),
+                    App.Vector(0.0, 1.0, 0.0),
                 ))
 
     if cutters:
@@ -2544,6 +2557,13 @@ def create_all_pieces(
                             piece (mm).  ``None`` → ``joint_width / 3``.
     joint_style           : ``'step'`` (default) — alternating stepped shelf
                             joints.  ``'taper'`` — legacy tapered box joints.
+    screw_joint           : when ``True`` horizontal through-holes are drilled
+                            perpendicular to every cut face in the bridge
+                            material.  Adjacent pieces get coaxial holes that
+                            form a continuous channel when assembled.
+    screw_hole_diameter   : diameter of each horizontal screw hole (mm).
+    screw_joint_spacing   : hole spacing along each joint face (mm).
+                            ``0`` (default) places one hole at the midpoint.
 
     Returns
     -------
@@ -2656,11 +2676,15 @@ def create_shelf_with_legs(
     joint_depth           : finger penetration depth (mm).
                             ``None`` → ``joint_width / 3``.
     joint_style           : ``'step'`` (default) or ``'taper'``.
-    screw_joint           : when ``True`` screw through-holes are drilled in
-                            the bridge material on each side of every cut line.
+    screw_joint           : when ``True`` horizontal through-holes are drilled
+                            perpendicular to every cut face in the bridge
+                            material.  Adjacent pieces get coaxial holes that
+                            form a continuous channel when assembled — insert a
+                            heat-set insert in one piece and thread a screw
+                            through from the other side.
     screw_joint_spacing   : hole spacing along each joint face (mm).
                             ``0`` (default) places one hole at the midpoint.
-    screw_hole_diameter   : diameter of each screw through-hole (mm).
+    screw_hole_diameter   : diameter of each horizontal screw hole (mm).
                             Same diameter on both sides of every joint.
                             Default 3.5 mm.
 
